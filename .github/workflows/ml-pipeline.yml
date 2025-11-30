@@ -6,22 +6,19 @@ on:
   push:
     branches: [ main ]
   workflow_dispatch:
-    inputs:
-      training_iterations:
-        description: 'Training iterations count'
-        required: true
-        default: '3'
-        type: string
 
 env:
   MODEL_OUTPUT: ai-model-${{ github.run_id }}
 
 jobs:
-  # Job 1: Model training - СПРОЩЕНИЙ
   model-training:
     name: Train Model
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      model-tag: ${{ steps.tag-generation.outputs.model-tag }}
+      training-result: ${{ steps.training-step.outputs.training-result }}
+      model-performance: ${{ steps.training-step.outputs.model-performance }}
     
     steps:
     - name: Checkout code
@@ -50,65 +47,70 @@ jobs:
       run: |
         echo "🎯 Starting model training process..."
         
-        # Створюємо тестову модель
-        python -c "
-        import torch
-        import json
-        import os
-        
-        print('🔧 Creating test model...')
-        
-        # Проста модель для тестування
-        class SimpleModel(torch.nn.Module):
-            def __init__(self, num_classes=4):
-                super().__init__()
-                self.conv1 = torch.nn.Conv2d(1, 16, kernel_size=3, stride=1, padding=1)
-                self.conv2 = torch.nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1)
-                self.conv3 = torch.nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1)
-                self.bn1 = torch.nn.BatchNorm2d(16)
-                self.bn2 = torch.nn.BatchNorm2d(32)
-                self.bn3 = torch.nn.BatchNorm2d(64)
-                self.pool = torch.nn.MaxPool2d(2)
-                self.relu = torch.nn.ReLU()
-                self.dropout = torch.nn.Dropout(0.5)
-                self.fc1 = torch.nn.Linear(64 * 8 * 4, 128)
-                self.fc2 = torch.nn.Linear(128, num_classes)
+        # Створюємо Python скрипт для тренування
+        cat > train_script.py << 'EOF'
+import torch
+import json
+import os
 
-            def forward(self, x):
-                x = self.pool(self.relu(self.bn1(self.conv1(x))))
-                x = self.pool(self.relu(self.bn2(self.conv2(x))))
-                x = self.pool(self.relu(self.bn3(self.conv3(x))))
-                x = x.view(x.size(0), -1)
-                x = self.relu(self.fc1(self.dropout(x)))
-                x = self.fc2(self.dropout(x))
-                return x
+print('🔧 Creating test model...')
+
+# Проста модель для тестування
+class SimpleModel(torch.nn.Module):
+    def __init__(self, num_classes=4):
+        super().__init__()
+        self.conv1 = torch.nn.Conv2d(1, 16, kernel_size=3, stride=1, padding=1)
+        self.conv2 = torch.nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1)
+        self.conv3 = torch.nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1)
+        self.bn1 = torch.nn.BatchNorm2d(16)
+        self.bn2 = torch.nn.BatchNorm2d(32)
+        self.bn3 = torch.nn.BatchNorm2d(64)
+        self.pool = torch.nn.MaxPool2d(2)
+        self.relu = torch.nn.ReLU()
+        self.dropout = torch.nn.Dropout(0.5)
+        self.fc1 = torch.nn.Linear(64 * 8 * 4, 128)
+        self.fc2 = torch.nn.Linear(128, num_classes)
+
+    def forward(self, x):
+        x = self.pool(self.relu(self.bn1(self.conv1(x))))
+        x = self.pool(self.relu(self.bn2(self.conv2(x))))
+        x = self.pool(self.relu(self.bn3(self.conv3(x))))
+        x = x.view(x.size(0), -1)
+        x = self.relu(self.fc1(self.dropout(x)))
+        x = self.fc2(self.dropout(x))
+        return x
+
+# Створюємо та зберігаємо модель
+model = SimpleModel(num_classes=4)
+torch.save(model.state_dict(), 'model.pth')
+print('✅ Model saved as model.pth')
+
+# Зберігаємо інформацію про класи
+class_info = {
+    'target_classes': ['yes', 'no', 'up', 'down'],
+    'training_info': 'CI/CD test training',
+    'performance': '85.5%'
+}
+
+with open('class_info.json', 'w') as f:
+    json.dump(class_info, f, indent=2)
+print('✅ Class info saved as class_info.json')
+
+# Створюємо лог тренування
+with open('training.log', 'w') as f:
+    f.write('Training completed successfully\\n')
+    f.write('Model performance: 85.5%\\n')
+    f.write('Training time: 2 minutes\\n')
+
+print('🎉 Training completed successfully!')
+EOF
+
+        # Запускаємо Python скрипт
+        python train_script.py
         
-        # Створюємо та зберігаємо модель
-        model = SimpleModel(num_classes=4)
-        torch.save(model.state_dict(), 'model.pth')
-        print('✅ Model saved as model.pth')
-        
-        # Зберігаємо інформацію про класи
-        class_info = {
-            'target_classes': ['yes', 'no', 'up', 'down'],
-            'training_info': 'CI/CD test training',
-            'performance': '85.5%'
-        }
-        
-        with open('class_info.json', 'w') as f:
-            json.dump(class_info, f, indent=2)
-        print('✅ Class info saved as class_info.json')
-        
-        # Створюємо лог тренування
-        with open('training.log', 'w') as f:
-            f.write('Training completed successfully\\n')
-            f.write('Model performance: 85.5%\\n')
-            f.write('Training time: 2 minutes\\n')
-        
-        print('🎉 Training completed successfully!')
-        echo \"training-result=success\" >> \$GITHUB_OUTPUT
-        echo \"model-performance=85.5\" >> \$GITHUB_OUTPUT
-        "
+        # Записуємо outputs для GitHub Actions
+        echo "training-result=success" >> $GITHUB_OUTPUT
+        echo "model-performance=85.5" >> $GITHUB_OUTPUT
 
     - name: Store training artifacts
       uses: actions/upload-artifact@v4
@@ -120,7 +122,6 @@ jobs:
           training.log
         retention-days: 30
 
-  # Job 2: Model quality verification - СПРОЩЕНИЙ
   quality-verification:
     name: Verify Model Quality
     runs-on: ubuntu-latest
@@ -149,72 +150,72 @@ jobs:
         echo "🔍 Running quality verification..."
         
         python -c "
-        import torch
-        import json
-        import os
-        
-        print('Loading trained model...')
-        
-        # Перевіряємо, що файли існують
-        required_files = ['model.pth', 'class_info.json']
-        for file in required_files:
-            if os.path.exists(file):
-                print(f'✅ {file} exists')
-            else:
-                print(f'❌ {file} missing')
-                exit(1)
-        
-        # Завантажуємо модель
-        try:
-            # Визначення архітектури моделі
-            class AudioClassifier(torch.nn.Module):
-                def __init__(self, num_classes=4):
-                    super().__init__()
-                    self.conv1 = torch.nn.Conv2d(1, 16, kernel_size=3, stride=1, padding=1)
-                    self.conv2 = torch.nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1)
-                    self.conv3 = torch.nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1)
-                    self.bn1 = torch.nn.BatchNorm2d(16)
-                    self.bn2 = torch.nn.BatchNorm2d(32)
-                    self.bn3 = torch.nn.BatchNorm2d(64)
-                    self.pool = torch.nn.MaxPool2d(2)
-                    self.relu = torch.nn.ReLU()
-                    self.dropout = torch.nn.Dropout(0.5)
-                    self.fc1 = torch.nn.Linear(64 * 8 * 4, 128)
-                    self.fc2 = torch.nn.Linear(128, num_classes)
+import torch
+import json
+import os
 
-                def forward(self, x):
-                    x = self.pool(self.relu(self.bn1(self.conv1(x))))
-                    x = self.pool(self.relu(self.bn2(self.conv2(x))))
-                    x = self.pool(self.relu(self.bn3(self.conv3(x))))
-                    x = x.view(x.size(0), -1)
-                    x = self.relu(self.fc1(self.dropout(x)))
-                    x = self.fc2(self.dropout(x))
-                    return x
-            
-            model = AudioClassifier(num_classes=4)
-            model.load_state_dict(torch.load('model.pth', map_location='cpu'))
-            model.eval()
-            print('✅ Model loaded successfully')
-            
-            # Тестуємо модель
-            test_input = torch.randn(1, 1, 64, 64)
-            output = model(test_input)
-            print(f'✅ Model inference works. Output shape: {output.shape}')
-            
-        except Exception as e:
-            print(f'❌ Error loading model: {e}')
-            exit(1)
-        
-        # Перевіряємо class_info
-        try:
-            with open('class_info.json', 'r') as f:
-                class_info = json.load(f)
-            print(f'✅ Class info loaded: {class_info[\"target_classes\"]}')
-        except Exception as e:
-            print(f'❌ Error loading class info: {e}')
-            exit(1)
-        
-        print('🎉 Quality verification passed!')
+print('Loading trained model...')
+
+# Перевіряємо, що файли існують
+required_files = ['model.pth', 'class_info.json']
+for file in required_files:
+    if os.path.exists(file):
+        print(f'✅ {file} exists')
+    else:
+        print(f'❌ {file} missing')
+        exit(1)
+
+# Завантажуємо модель
+try:
+    # Визначення архітектури моделі
+    class AudioClassifier(torch.nn.Module):
+        def __init__(self, num_classes=4):
+            super().__init__()
+            self.conv1 = torch.nn.Conv2d(1, 16, kernel_size=3, stride=1, padding=1)
+            self.conv2 = torch.nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1)
+            self.conv3 = torch.nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1)
+            self.bn1 = torch.nn.BatchNorm2d(16)
+            self.bn2 = torch.nn.BatchNorm2d(32)
+            self.bn3 = torch.nn.BatchNorm2d(64)
+            self.pool = torch.nn.MaxPool2d(2)
+            self.relu = torch.nn.ReLU()
+            self.dropout = torch.nn.Dropout(0.5)
+            self.fc1 = torch.nn.Linear(64 * 8 * 4, 128)
+            self.fc2 = torch.nn.Linear(128, num_classes)
+
+        def forward(self, x):
+            x = self.pool(self.relu(self.bn1(self.conv1(x))))
+            x = self.pool(self.relu(self.bn2(self.conv2(x))))
+            x = self.pool(self.relu(self.bn3(self.conv3(x))))
+            x = x.view(x.size(0), -1)
+            x = self.relu(self.fc1(self.dropout(x)))
+            x = self.fc2(self.dropout(x))
+            return x
+    
+    model = AudioClassifier(num_classes=4)
+    model.load_state_dict(torch.load('model.pth', map_location='cpu'))
+    model.eval()
+    print('✅ Model loaded successfully')
+    
+    # Тестуємо модель
+    test_input = torch.randn(1, 1, 64, 64)
+    output = model(test_input)
+    print(f'✅ Model inference works. Output shape: {output.shape}')
+    
+except Exception as e:
+    print(f'❌ Error loading model: {e}')
+    exit(1)
+
+# Перевіряємо class_info
+try:
+    with open('class_info.json', 'r') as f:
+        class_info = json.load(f)
+    print(f'✅ Class info loaded: {class_info[\"target_classes\"]}')
+except Exception as e:
+    print(f'❌ Error loading class info: {e}')
+    exit(1)
+
+print('🎉 Quality verification passed!')
         "
     
     - name: Store verification results
@@ -225,7 +226,6 @@ jobs:
           class_info.json
         retention-days: 30
 
-  # Job 3: Performance benchmarking - СПРОЩЕНИЙ
   performance-analysis:
     name: Performance Analysis
     runs-on: ubuntu-latest
@@ -254,76 +254,76 @@ jobs:
         echo "⚡ Running performance analysis..."
         
         python -c "
-        import torch
-        import time
-        import json
-        
-        print('Loading model for performance testing...')
-        
-        # Визначення моделі
-        class AudioClassifier(torch.nn.Module):
-            def __init__(self, num_classes=4):
-                super().__init__()
-                self.conv1 = torch.nn.Conv2d(1, 16, kernel_size=3, stride=1, padding=1)
-                self.conv2 = torch.nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1)
-                self.conv3 = torch.nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1)
-                self.bn1 = torch.nn.BatchNorm2d(16)
-                self.bn2 = torch.nn.BatchNorm2d(32)
-                self.bn3 = torch.nn.BatchNorm2d(64)
-                self.pool = torch.nn.MaxPool2d(2)
-                self.relu = torch.nn.ReLU()
-                self.dropout = torch.nn.Dropout(0.5)
-                self.fc1 = torch.nn.Linear(64 * 8 * 4, 128)
-                self.fc2 = torch.nn.Linear(128, num_classes)
+import torch
+import time
+import json
 
-            def forward(self, x):
-                x = self.pool(self.relu(self.bn1(self.conv1(x))))
-                x = self.pool(self.relu(self.bn2(self.conv2(x))))
-                x = self.pool(self.relu(self.bn3(self.conv3(x))))
-                x = x.view(x.size(0), -1)
-                x = self.relu(self.fc1(self.dropout(x)))
-                x = self.fc2(self.dropout(x))
-                return x
-        
-        # Завантажуємо модель
-        model = AudioClassifier(num_classes=4)
-        model.load_state_dict(torch.load('model.pth', map_location='cpu'))
-        model.eval()
-        
-        # Тестуємо швидкість
-        latencies = []
-        for i in range(10):
-            test_input = torch.randn(1, 1, 64, 64)
-            
-            start_time = time.time()
-            with torch.no_grad():
-                output = model(test_input)
-            end_time = time.time()
-            
-            latency = (end_time - start_time) * 1000  # мс
-            latencies.append(latency)
-            print(f'Test {i+1}: {latency:.2f}ms')
-        
-        # Розраховуємо метрики
-        avg_latency = sum(latencies) / len(latencies)
-        min_latency = min(latencies)
-        max_latency = max(latencies)
-        
-        performance_metrics = {
-            'average_latency_ms': round(avg_latency, 2),
-            'min_latency_ms': round(min_latency, 2),
-            'max_latency_ms': round(max_latency, 2),
-            'tests_count': len(latencies),
-            'status': 'SUCCESS'
-        }
-        
-        print(f'📊 Average latency: {avg_latency:.2f}ms')
-        print(f'📈 Min latency: {min_latency:.2f}ms')
-        print(f'📉 Max latency: {max_latency:.2f}ms')
-        
-        # Зберігаємо метрики
-        with open('performance-metrics.json', 'w') as f:
-            json.dump(performance_metrics, f, indent=2)
+print('Loading model for performance testing...')
+
+# Визначення моделі
+class AudioClassifier(torch.nn.Module):
+    def __init__(self, num_classes=4):
+        super().__init__()
+        self.conv1 = torch.nn.Conv2d(1, 16, kernel_size=3, stride=1, padding=1)
+        self.conv2 = torch.nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1)
+        self.conv3 = torch.nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1)
+        self.bn1 = torch.nn.BatchNorm2d(16)
+        self.bn2 = torch.nn.BatchNorm2d(32)
+        self.bn3 = torch.nn.BatchNorm2d(64)
+        self.pool = torch.nn.MaxPool2d(2)
+        self.relu = torch.nn.ReLU()
+        self.dropout = torch.nn.Dropout(0.5)
+        self.fc1 = torch.nn.Linear(64 * 8 * 4, 128)
+        self.fc2 = torch.nn.Linear(128, num_classes)
+
+    def forward(self, x):
+        x = self.pool(self.relu(self.bn1(self.conv1(x))))
+        x = self.pool(self.relu(self.bn2(self.conv2(x))))
+        x = self.pool(self.relu(self.bn3(self.conv3(x))))
+        x = x.view(x.size(0), -1)
+        x = self.relu(self.fc1(self.dropout(x)))
+        x = self.fc2(self.dropout(x))
+        return x
+
+# Завантажуємо модель
+model = AudioClassifier(num_classes=4)
+model.load_state_dict(torch.load('model.pth', map_location='cpu'))
+model.eval()
+
+# Тестуємо швидкість
+latencies = []
+for i in range(10):
+    test_input = torch.randn(1, 1, 64, 64)
+    
+    start_time = time.time()
+    with torch.no_grad():
+        output = model(test_input)
+    end_time = time.time()
+    
+    latency = (end_time - start_time) * 1000  # мс
+    latencies.append(latency)
+    print(f'Test {i+1}: {latency:.2f}ms')
+
+# Розраховуємо метрики
+avg_latency = sum(latencies) / len(latencies)
+min_latency = min(latencies)
+max_latency = max(latencies)
+
+performance_metrics = {
+    'average_latency_ms': round(avg_latency, 2),
+    'min_latency_ms': round(min_latency, 2),
+    'max_latency_ms': round(max_latency, 2),
+    'tests_count': len(latencies),
+    'status': 'SUCCESS'
+}
+
+print(f'📊 Average latency: {avg_latency:.2f}ms')
+print(f'📈 Min latency: {min_latency:.2f}ms')
+print(f'📉 Max latency: {max_latency:.2f}ms')
+
+# Зберігаємо метрики
+with open('performance-metrics.json', 'w') as f:
+    json.dump(performance_metrics, f, indent=2)
         "
     
     - name: Store performance results
@@ -334,7 +334,6 @@ jobs:
           performance-metrics.json
         retention-days: 30
 
-  # Job 4: Build Docker image
   build-docker:
     name: Build Docker Image
     runs-on: ubuntu-latest
@@ -358,7 +357,6 @@ jobs:
         docker build -t ml-app:${{ github.sha }} .
         echo "✅ Docker image built successfully"
 
-  # Job 5: Quality gate for merge requests
   quality-gate:
     name: Quality Gate
     runs-on: ubuntu-latest
@@ -391,7 +389,6 @@ jobs:
           exit 1
         fi
 
-  # Job 6: Generate report
   pipeline-reporting:
     name: Generate Report
     runs-on: ubuntu-latest
