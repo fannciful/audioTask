@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  voice-classifier:
+    build: .
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./models:/app/models
+    environment:
+      - FLASK_ENV=production
+    restart: unless-stopped
+
+  # Для тестування (опціонально)
+  test-client:
+    build: .
+    command: ["python", "test_api.py"]
+    depends_on:
+      - voice-classifier
+    environment:
+      - WAIT_HOSTS=voice-classifier:5000

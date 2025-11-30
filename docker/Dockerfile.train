@@ -1,0 +1,25 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# Minimal system dependencies
+RUN apt-get update && apt-get install -y \
+    libsndfile1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Copy only necessary files
+COPY requirements.txt .
+COPY train.py .
+COPY class_info.json .
+
+# Install only essential packages
+RUN pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Environment for minimal training
+ENV PYTHONPATH=/app
+ENV EPOCHS=2
+ENV SAMPLES_PER_CLASS=10
+
+CMD ["python", "train.py"]

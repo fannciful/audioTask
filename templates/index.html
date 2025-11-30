@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice Command Analyzer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            background: #bdccdbff;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            width: 100%;
+            max-width: 420px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 25px;
+        }
+
+        .icon {
+            font-size: 40px;
+            margin-bottom: 10px;
+        }
+
+        h1 {
+            color: #333;
+            font-size: 22px;
+            margin-bottom: 5px;
+        }
+
+        .subtitle {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .upload-section {
+            margin-bottom: 20px;
+        }
+
+        .file-input-wrapper {
+            margin-bottom: 15px;
+        }
+
+        .file-input {
+            width: 100%;
+            padding: 15px;
+            border: 2px dashed #ddd;
+            border-radius: 8px;
+            background: #f8f9fa;
+            text-align: center;
+            cursor: pointer;
+            transition: border-color 0.3s ease;
+        }
+
+        .file-input:hover {
+            border-color: #007bff;
+        }
+
+        input[type="file"] {
+            display: none;
+        }
+
+        .file-name {
+            text-align: center;
+            color: #666;
+            font-size: 14px;
+            margin-top: 8px;
+        }
+
+        .analyze-btn {
+            width: 100%;
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 12px;
+            border-radius: 6px;
+            font-size: 16px;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+
+        .analyze-btn:hover:not(:disabled) {
+            background: #0056b3;
+        }
+
+        .analyze-btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            margin: 20px 0;
+        }
+
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #007bff;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .result {
+            display: none;
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 20px;
+            margin-top: 20px;
+        }
+
+        .result-title {
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 15px;
+            text-align: center;
+        }
+
+        .main-result {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 15px;
+            text-align: center;
+            border-left: 4px solid #007bff;
+        }
+
+        .command {
+            font-size: 28px;
+            font-weight: bold;
+            color: #007bff;
+            margin: 10px 0;
+        }
+
+        .confidence {
+            font-size: 18px;
+            color: #28a745;
+            margin: 5px 0;
+        }
+
+        .time {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .probabilities {
+            margin-top: 15px;
+        }
+
+        .prob-title {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 10px;
+            text-align: center;
+        }
+
+        .prob-list {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+
+        .prob-item {
+            background: white;
+            padding: 10px;
+            border-radius: 6px;
+            text-align: center;
+            border: 1px solid #e9ecef;
+        }
+
+        .prob-label {
+            font-weight: 500;
+            color: #555;
+            margin-bottom: 2px;
+        }
+
+        .prob-value {
+            font-size: 14px;
+            font-weight: 600;
+            color: #007bff;
+        }
+
+        .error {
+            display: none;
+            background: #f8d7da;
+            color: #721c24;
+            padding: 12px;
+            border-radius: 6px;
+            margin-top: 15px;
+            text-align: center;
+        }
+
+        .info {
+            background: #e7f3ff;
+            padding: 12px;
+            border-radius: 6px;
+            margin-top: 20px;
+            font-size: 12px;
+            color: #555;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="header">
+            <div class="icon">🎤</div>
+            <h1>Voice Command Analyzer</h1>
+            <div class="subtitle">Upload WAV file for analysis</div>
+        </div>
+
+        <div class="upload-section">
+            <div class="file-input-wrapper">
+                <div class="file-input" onclick="document.getElementById('fileInput').click()">
+                    📁 Click to select WAV file
+                </div>
+                <input type="file" id="fileInput" accept=".wav,audio/wav">
+            </div>
+            <div class="file-name" id="fileName">No file selected</div>
+        </div>
+
+        <button class="analyze-btn" id="analyzeBtn" disabled>Analyze Audio</button>
+
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <div>Processing...</div>
+        </div>
+
+        <div class="error" id="error"></div>
+
+        <div class="result" id="result">
+            <div class="result-title">Analysis Result</div>
+            
+            <div class="main-result">
+                <div>Recognized Command:</div>
+                <div class="command" id="commandValue">—</div>
+                <div class="confidence" id="confidenceValue">—</div>
+                <div class="time" id="timeValue">—</div>
+            </div>
+
+            <div class="probabilities">
+                <div class="prob-title">Probabilities:</div>
+                <div class="prob-list" id="probabilitiesList">
+                    <!-- Probability items will be inserted here -->
+                </div>
+            </div>
+        </div>
+
+        <div class="info">
+            <strong>Commands:</strong> yes, no, up, down<br>
+            <strong>Format:</strong> WAV, 1 second, 16kHz
+        </div>
+    </div>
+
+    <script>
+        const fileInput = document.getElementById('fileInput');
+        const fileName = document.getElementById('fileName');
+        const analyzeBtn = document.getElementById('analyzeBtn');
+        const loading = document.getElementById('loading');
+        const error = document.getElementById('error');
+        const result = document.getElementById('result');
+        const commandValue = document.getElementById('commandValue');
+        const confidenceValue = document.getElementById('confidenceValue');
+        const timeValue = document.getElementById('timeValue');
+        const probabilitiesList = document.getElementById('probabilitiesList');
+
+        fileInput.addEventListener('change', function() {
+            if (this.files[0]) {
+                fileName.textContent = this.files[0].name;
+                analyzeBtn.disabled = false;
+            } else {
+                fileName.textContent = 'No file selected';
+                analyzeBtn.disabled = true;
+            }
+            hideResult();
+            hideError();
+        });
+
+        analyzeBtn.addEventListener('click', function() {
+            const file = fileInput.files[0];
+            if (!file) return;
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            showLoading();
+            hideResult();
+            hideError();
+
+            fetch('/predict', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                hideLoading();
+                
+                if (data.status === 'success') {
+                    showResult(data);
+                } else {
+                    showError(data.error || 'Error processing file');
+                }
+            })
+            .catch(err => {
+                hideLoading();
+                showError('Network error');
+            });
+        });
+
+        function showLoading() {
+            loading.style.display = 'block';
+            analyzeBtn.disabled = true;
+        }
+
+        function hideLoading() {
+            loading.style.display = 'none';
+            analyzeBtn.disabled = false;
+        }
+
+        function showResult(data) {
+            commandValue.textContent = data.prediction;
+            confidenceValue.textContent = (data.confidence * 100).toFixed(1) + '% confidence';
+            timeValue.textContent = data.inference_time_ms + ' ms';
+            
+            probabilitiesList.innerHTML = '';
+            Object.entries(data.probabilities).forEach(([command, probability]) => {
+                const probItem = document.createElement('div');
+                probItem.className = 'prob-item';
+                probItem.innerHTML = `
+                    <div class="prob-label">${command}</div>
+                    <div class="prob-value">${(probability * 100).toFixed(1)}%</div>
+                `;
+                probabilitiesList.appendChild(probItem);
+            });
+            
+            result.style.display = 'block';
+        }
+
+        function hideResult() {
+            result.style.display = 'none';
+        }
+
+        function showError(message) {
+            error.textContent = message;
+            error.style.display = 'block';
+        }
+
+        function hideError() {
+            error.style.display = 'none';
+        }
+    </script>
+</body>
+</html>
