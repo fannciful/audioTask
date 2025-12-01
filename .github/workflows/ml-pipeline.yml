@@ -107,7 +107,8 @@ jobs:
           # Try to extract performance score from training_metrics.json
           if [ -f "model-output/training_metrics.json" ]; then
             ACCURACY=$(python3 -c "
-import json
+            
+          import json
 try:
     with open('model-output/training_metrics.json', 'r') as f:
         data = json.load(f)
@@ -328,7 +329,7 @@ try:
     
 except Exception as e:
     print(f'Error during validation: {e}')
-    import traceback
+      import traceback
     traceback.print_exc()
     
     # Create a basic validation report even if validation fails
