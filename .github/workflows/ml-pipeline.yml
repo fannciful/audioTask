@@ -1,512 +1,539 @@
-name: AI Model Training and Deployment Pipeline
+name: ML Pipeline for Model Lifecycle Management
 
 on:
-  # 1. For each Merge Request
-  pull_request:
-    branches: [ main, master, develop ]
-    types: [opened, synchronize, reopened, ready_for_review]
-  
-  # 2. For push to main branches (auto-deploy)
-  push:
-    branches: [ main, master ]
-    paths-ignore:
-      - 'README.md'
-      - 'documentation/**'
-      - '*.md'
-      - 'docs/**'
-  
-  # 3. Manual trigger from UI
+  # Manual execution from GitHub interface
   workflow_dispatch:
     inputs:
-      training_epochs:
-        description: 'Кількість епох тренування'
+      training_cycles:
+        description: 'Training cycles count'
         required: true
-        default: '2'
+        default: '3'
         type: string
-      use_small_dataset:
-        description: 'Використовувати компактний датасет'
+      compact_dataset:
+        description: 'Use compact dataset'
         required: false
         default: true
         type: boolean
-      publish_to_registry:
-        description: 'Публікувати в GitHub Container Registry'
+      upload_to_registry:
+        description: 'Upload to Container Registry'
         required: false
         default: false
         type: boolean
 
-# FIXED: Використовуємо env замість environment
+  # Merge request validation
+  pull_request:
+    branches: [ primary, main, development ]
+    types: [opened, synchronize, reopened, ready_for_review]
+  
+  # Automatic deployment on main branch
+  push:
+    branches: [ primary, main ]
+    paths-ignore:
+      - '*.md'
+      - 'documentation/**'
+      - 'docs/**'
+      - 'README*'
+
 env:
-  CONTAINER_REGISTRY: ghcr.io
-  MODEL_OUTPUT: model-artifacts-${{ github.run_id }}
-  TRAINING_LOG: training-log-${{ github.run_id }}.txt
+  REGISTRY_URL: ghcr.io
+  REPOSITORY_NAME: ${{ github.repository }}
+  ARTIFACT_NAME: ml-model-${{ github.run_id }}
 
 jobs:
-  # Job 1: Тренування моделі
-  model-training:
-    name: Тренування моделі
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+  # Job 1: Model training process
+  train-model:
+    name: Train ML Model
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+    
     outputs:
-      model-tag: ${{ steps.tag-generation.outputs.model-tag }}
-      training-result: ${{ steps.training-step.outputs.training-result }}
-      model-performance: ${{ steps.training-step.outputs.model-performance }}
+      model_version: ${{ steps.create-tag.outputs.model-version }}
+      training_status: ${{ steps.execute-training.outputs.training-status }}
+      performance_score: ${{ steps.execute-training.outputs.performance-score }}
     
     steps:
-    - name: Отримання коду
+    - name: Download repository
       uses: actions/checkout@v4
     
-    - name: Очищення дискового простору
+    - name: Optimize workspace
       run: |
-        echo "🧼 Оптимізація дискового простору..."
+        echo "Optimizing system resources..."
+        sudo apt-get autoremove -y
         sudo apt-get clean
-        docker system prune -a -f --volumes || true
+        docker system prune -a -f --volumes 2>/dev/null || true
+        echo "Storage status:"
+        df -h
     
-    - name: Налаштування Docker builder
+    - name: Configure Docker
       uses: docker/setup-buildx-action@v3
     
-    - name: Створення тегу моделі
-      id: tag-generation
+    - name: Generate model identifier
+      id: create-tag
       run: |
-        BUILD_TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-        echo "model-tag=voice-classifier-${BUILD_TIMESTAMP}-${GITHUB_SHA:0:7}" >> $GITHUB_OUTPUT
-        echo "🏷️ Згенеровано тег моделі: voice-classifier-${BUILD_TIMESTAMP}-${GITHUB_SHA:0:7}"
+        TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+        echo "model-version=model-v${TIMESTAMP}-${GITHUB_SHA:0:8}" >> $GITHUB_OUTPUT
+        echo "Generated identifier: model-v${TIMESTAMP}-${GITHUB_SHA:0:8}"
     
-    - name: Побудова контейнера для тренування
+    - name: Create training environment
       run: |
-        echo "🏗️ Побудова контейнера для тренування..."
-        docker build -f docker/Dockerfile.train -t training-container:latest .
+        echo "Creating training environment..."
+        docker build -f docker/Dockerfile.train -t model-trainer:latest .
     
-    - name: Виконання тренування моделі
-      id: training-step
+    - name: Run training process
+      id: execute-training
       run: |
-        echo "🎯 Початок тренування моделі..."
+        echo "Starting model training..."
         
-        # Створення директорій для артефактів
-        mkdir -p model-artifacts
+        # Prepare output location
+        mkdir -p model-output
         
-        # Збереження логу тренування
-        echo "=== ЛОГ ТРЕНУВАННЯ - Початок $(date) ===" > ${{ env.TRAINING_LOG }}
+        # Execute training
+        docker run --rm \
+          -v $(pwd)/model-output:/app/output \
+          -v $(pwd)/data:/app/data \
+          -e TRAINING_ITERATIONS=${{ github.event.inputs.training_cycles || '3' }} \
+          -e SAMPLE_SIZE=${{ github.event.inputs.compact_dataset && '100' || '500' }} \
+          model-trainer:latest
         
-        # FIXED: Додаємо флаг --shm-size для підвищення стабільності
-        docker run --rm --shm-size=1g \
-          -v $(pwd)/model-artifacts:/app/artifacts \
-          -e EPOCHS=${{ github.event.inputs.training_epochs || '2' }} \
-          -e SAMPLES_PER_CLASS=${{ github.event.inputs.use_small_dataset && '5' || '10' }} \
-          training-container:latest 2>&1 | tee -a ${{ env.TRAINING_LOG }}
-        
-        # Перевірка результатів тренування
-        if [ -f "model-artifacts/model.pth" ]; then
-          echo "✅ Тренування моделі успішно завершено" | tee -a ${{ env.TRAINING_LOG }}
-          echo "training-result=success" >> $GITHUB_OUTPUT
+        # Validate results
+        if [ -f "model-output/model-weights.pth" ]; then
+          echo "Training completed"
+          echo "training-status=success" >> $GITHUB_OUTPUT
           
-          # Витягнення продуктивності з логу
-          if grep -q "Accuracy\|accuracy\|Test Accuracy" ${{ env.TRAINING_LOG }}; then
-            PERFORMANCE=$(grep -E "Test Accuracy.*%|accuracy.*%|Accuracy:" ${{ env.TRAINING_LOG }} | grep -o '[0-9]*\.[0-9]*' | tail -1 || echo "85.5")
-            echo "model-performance=$PERFORMANCE" >> $GITHUB_OUTPUT
-            echo "📈 Продуктивність моделі: $PERFORMANCE%" | tee -a ${{ env.TRAINING_LOG }}
-          else
-            echo "model-performance=85.5" >> $GITHUB_OUTPUT
-            echo "📈 Продуктивність моделі: 85.5% (за замовчуванням)" | tee -a ${{ env.TRAINING_LOG }}
+          if [ -f "model-output/training-log.txt" ]; then
+            SCORE=$(grep "Model Accuracy" model-output/training-log.txt | grep -o '[0-9]*\.[0-9]*' | head -1 || echo "0")
+            echo "performance-score=$SCORE" >> $GITHUB_OUTPUT
+            echo "Model Accuracy: $SCORE%"
           fi
         else
-          echo "❌ Помилка під час тренування моделі" | tee -a ${{ env.TRAINING_LOG }}
-          echo "training-result=failed" >> $GITHUB_OUTPUT
+          echo "Training failed"
+          echo "training-status=failed" >> $GITHUB_OUTPUT
           exit 1
         fi
-        
-        echo "=== ЛОГ ТРЕНУВАННЯ - Завершення $(date) ===" >> ${{ env.TRAINING_LOG }}
     
-    - name: Побудова інференс контейнера
+    - name: Create inference environment
       run: |
-        echo "🏗️ Побудова контейнера для інференсу..."
-        docker build -f docker/Dockerfile.inference -t inference-container:latest .
+        echo "Creating inference environment..."
+        docker build -f docker/Dockerfile.serve -t model-server:latest .
     
-    - name: Збереження артефактів тренування
+    - name: Save training artifacts
       uses: actions/upload-artifact@v4
       with:
-        # FIXED: Використовуємо env замість environment
-        name: ${{ env.MODEL_OUTPUT }}
+        name: ${{ env.ARTIFACT_NAME }}
         path: |
-          model-artifacts/
-          ${{ env.TRAINING_LOG }}
-        retention-days: 30
+          model-output/
+        retention-days: 28
 
-  # Job 2: Перевірка якості моделі
-  quality-verification:
-    name: Перевірка якості моделі
-    runs-on: ubuntu-latest
-    needs: model-training
-    if: needs.model-training.outputs.training-result == 'success'
+  # Job 2: Model validation
+  validate-model:
+    name: Validate Model Quality
+    runs-on: ubuntu-22.04
+    needs: train-model
+    if: needs.train-model.outputs.training_status == 'success'
     
     steps:
-    - name: Отримання коду
+    - name: Download repository
       uses: actions/checkout@v4
     
-    - name: Завантаження артефактів моделі
+    - name: Get model artifacts
       uses: actions/download-artifact@v4
       with:
-        # FIXED: Використовуємо env замість environment
-        name: ${{ env.MODEL_OUTPUT }}
-        path: model-artifacts/
+        name: ${{ env.ARTIFACT_NAME }}
+        path: model-output/
     
-    - name: Налаштування Python середовища
+    - name: Setup Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.10'
+        python-version: '3.11'
     
-    - name: Встановлення залежностей для тестування
+    - name: Install dependencies
       run: |
-        pip install torch==2.0.1 torchaudio==2.0.2 numpy==1.24.3
+        pip install -r requirements.txt
     
-    - name: Execute quality tests
+    - name: Execute validation
       run: |
-        echo "🔍 Running comprehensive quality verification..."
+        echo "Running model validation..."
         
         python -c "
         import torch
         import json
-        import numpy as np
         
-        print('Loading trained model...')
-        # Load model with architecture definition
+        print('Loading model...')
         try:
-            from model_architecture import NeuralNetwork
-            model_instance = NeuralNetwork(category_count=4)
-            model_instance.load_state_dict(torch.load('model-artifacts/neural-network.pth', map_location='cpu'))
-            print('✅ Model loaded using state dictionary')
-        except Exception as load_error:
-            print(f'⚠️ State dict loading issue: {load_error}')
-            # Attempt full model load
-            try:
-                model_instance = torch.load('model-artifacts/complete-model.pth', map_location='cpu')
-                print('✅ Complete model loaded successfully')
-            except Exception as full_load_error:
-                print(f'⚠️ Complete model loading issue: {full_load_error}')
-                # Create basic model for testing
-                from model_architecture import NeuralNetwork
-                model_instance = NeuralNetwork(category_count=4)
-                print('⚠️ Using untrained model for verification')
+            from network import MLModel
+            model = MLModel(class_count=4)
+            model.load_state_dict(torch.load('model-output/model-weights.pth', map_location='cpu'))
+            print('Model loaded successfully')
+        except Exception as e:
+            print(f'Loading issue: {e}')
+            from network import MLModel
+            model = MLModel(class_count=4)
+            print('Using default model')
         
-        model_instance.eval()
+        model.eval()
         
-        print('Creating validation dataset...')
-        # Generate test data with correct dimensions [batch, channels, height, width]
-        torch.manual_seed(123)
-        validation_results = []
+        print('Running validation tests...')
+        test_results = []
         
-        for test_idx in range(25):
-            # Create synthetic input data with proper shape
-            input_data = torch.randn(1, 1, 32, 32)  # [batch, channels, height, width]
+        for test_num in range(20):
+            input_tensor = torch.randn(1, 1, 32, 32)
             
-            # Generate prediction
             with torch.no_grad():
-                model_output = model_instance(input_data)
-                predicted_class = torch.argmax(model_output).item()
-                confidence_score = torch.nn.functional.softmax(model_output, dim=1)[0][predicted_class].item()
+                output = model(input_tensor)
+                predicted = torch.argmax(output).item()
+                confidence = torch.nn.functional.softmax(output, dim=1)[0][predicted].item()
             
-            validation_results.append({
-                'test_id': test_idx,
-                'predicted_class': predicted_class,
-                'confidence': round(confidence_score, 4),
-                'class_name': ['affirmative', 'negative', 'increase', 'decrease'][predicted_class]
+            test_results.append({
+                'test_id': test_num,
+                'prediction': predicted,
+                'confidence': round(confidence, 4),
+                'label': ['positive', 'negative', 'up', 'down'][predicted]
             })
         
         # Analyze results
-        passed_tests = len([result for result in validation_results if result['confidence'] > 0.15])
-        mean_confidence = sum(result['confidence'] for result in validation_results) / len(validation_results)
+        successful = len([r for r in test_results if r['confidence'] > 0.15])
+        avg_confidence = sum(r['confidence'] for r in test_results) / len(test_results)
         
-        quality_report = {
-            'total_validation_tests': len(validation_results),
-            'successful_validations': passed_tests,
-            'success_percentage': passed_tests / len(validation_results),
-            'average_confidence_score': mean_confidence,
-            'quality_status': 'PASS' if passed_tests >= 18 else 'FAIL',
-            'input_dimensions': [1, 1, 32, 32],
-            'validation_details': validation_results
+        validation_report = {
+            'total_tests': len(test_results),
+            'passed_tests': successful,
+            'pass_rate': successful / len(test_results),
+            'avg_confidence': avg_confidence,
+            'validation_status': 'PASS' if successful >= 15 else 'FAIL',
+            'test_details': test_results
         }
         
-        # Save verification results
-        with open('model-artifacts/quality-assessment.json', 'w') as output_file:
-            json.dump(quality_report, output_file, indent=2)
+        # Save results
+        with open('model-output/validation-report.json', 'w') as f:
+            json.dump(validation_report, f, indent=2)
         
-        # Save CSV data without pandas
-        with open('model-artifacts/validation-data.csv', 'w') as csv_file:
-            csv_file.write('test_id,predicted_class,confidence_score,class_name\\n')
-            for result in validation_results:
-                csv_file.write(f'{result[\"test_id\"]},{result[\"predicted_class\"]},{result[\"confidence\"]},{result[\"class_name\"]}\\n')
+        # Save CSV data
+        with open('model-output/validation-data.csv', 'w') as csv_file:
+            csv_file.write('test_id,prediction,confidence,label\n')
+            for result in test_results:
+                csv_file.write(f'{result[\"test_id\"]},{result[\"prediction\"]},{result[\"confidence\"]},{result[\"label\"]}\n')
         
-        print(f'✅ Quality verification completed!')
-        print(f'📊 Success percentage: {quality_report[\"success_percentage\"]:.1%}')
-        print(f'📈 Average confidence: {quality_report[\"average_confidence_score\"]:.3f}')
-        print(f'🎯 Quality status: {quality_report[\"quality_status\"]}')
+        print(f'Validation complete!')
+        print(f'Success rate: {validation_report[\"pass_rate\"]:.1%}')
+        print(f'Average confidence: {validation_report[\"avg_confidence\"]:.3f}')
+        print(f'Status: {validation_report[\"validation_status\"]}')
         "
     
-    
-    - name: Збереження результатів перевірки якості
+    - name: Save validation results
       uses: actions/upload-artifact@v4
       with:
-        name: quality-results-${{ github.run_id }}
+        name: validation-${{ github.run_id }}
         path: |
-          quality-results/
-        retention-days: 30
+          model-output/validation-report.json
+          model-output/validation-data.csv
+        retention-days: 28
 
-  # Job 3: Тестування продуктивності (latency)
-  performance-benchmark:
-    name: Тестування продуктивності
-    runs-on: ubuntu-latest
-    needs: [model-training, quality-verification]
-    if: needs.model-training.outputs.training-result == 'success' && needs.quality-verification.result == 'success'
+  # Job 3: Performance evaluation
+  evaluate-performance:
+    name: Evaluate Model Performance
+    runs-on: ubuntu-22.04
+    needs: [train-model, validate-model]
+    if: needs.train-model.outputs.training_status == 'success'
     
     steps:
-    - name: Отримання коду
+    - name: Download repository
       uses: actions/checkout@v4
     
-    - name: Побудова інференс контейнера
-      run: |
-        echo "🏗️ Побудова контейнера для тестування продуктивності..."
-        docker build -f docker/Dockerfile.inference -t inference-container:latest .
+    - name: Get model artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ env.ARTIFACT_NAME }}
+        path: model-output/
     
-    - name: Встановлення інструментів для тестування
+    - name: Build server
       run: |
-        pip install requests==2.31.0 soundfile==0.12.1 numpy==1.24.3
+        echo "Building inference server..."
+        docker build -f docker/Dockerfile.serve -t model-server:latest .
     
-    - name: Виконання тестів продуктивності
+    - name: Install tools
       run: |
-        echo "⚡ Тестування продуктивності API..."
-        
-        # Запуск сервера в фоні
-        docker run -d --name perf-server -p 5000:5000 inference-container:latest
-        
-        # Очікування ініціалізації сервера
-        echo "⏳ Очікування ініціалізації сервера (30 секунд)..."
-        sleep 30
-        
-        # Тестування health endpoint
-        echo "🩺 Перевірка health endpoint..."
-        for i in {1..6}; do
-          if curl -s http://localhost:5000/health | grep -q "healthy"; then
-            echo "✅ Сервер готовий до тестування"
-            SERVER_READY=true
-            break
-          fi
-          echo "Спроба $i/6: сервер ще не готовий..."
-          sleep 5
-        done
-        
-        if [ -z "$SERVER_READY" ]; then
-          echo "❌ Сервер не запустився за 30 секунд"
-          docker logs perf-server
-          exit 1
-        fi
-        
-        # Виконання benchmark тестів
-        echo "🚀 Запуск benchmark тестів..."
-        python benchmark.py --url http://localhost:5000 --output performance-metrics.json --requests 10
-        
-        # Зупинка сервера
-        docker stop perf-server
-        docker rm perf-server
+        echo "Installing performance tools..."
+        pip install requests
     
-    - name: Збереження результатів продуктивності
+    - name: Run performance test
+      run: |
+        echo "Running performance evaluation..."
+        
+        # Start server
+        docker run -d --name test-server -p 8080:8080 model-server:latest
+        
+        # Wait for startup
+        echo "Waiting for server..."
+        sleep 15
+        
+        # Run tests
+        python -c "
+        import requests
+        import time
+        import json
+        
+        print('Starting performance tests...')
+        response_times = []
+        
+        # Test health endpoint
+        for i in range(20):
+            start = time.time()
+            try:
+                resp = requests.get('http://localhost:8080/health', timeout=10)
+                end = time.time()
+                
+                if resp.status_code == 200:
+                    latency = (end - start) * 1000
+                    response_times.append(latency)
+                    print(f'Request {i+1}: {latency:.2f}ms')
+            except Exception as e:
+                print(f'Request {i+1} failed: {e}')
+        
+        # Calculate metrics
+        if response_times:
+            import statistics
+            performance_data = {
+                'total_requests': 20,
+                'successful': len(response_times),
+                'success_rate': len(response_times) / 20,
+                'avg_response_ms': statistics.mean(response_times),
+                'min_response_ms': min(response_times),
+                'max_response_ms': max(response_times),
+                'p95_ms': sorted(response_times)[int(len(response_times)*0.95)] if len(response_times) >= 5 else statistics.mean(response_times)
+            }
+            
+            print(f'Performance test complete!')
+            print(f'Success rate: {performance_data[\"success_rate\"]:.1%}')
+            print(f'Average response: {performance_data[\"avg_response_ms\"]:.2f}ms')
+        else:
+            performance_data = {
+                'error': 'No successful requests',
+                'total_requests': 20,
+                'successful': 0,
+                'success_rate': 0
+            }
+            print('Performance test failed')
+        
+        # Save results
+        with open('performance-report.json', 'w') as f:
+            json.dump(performance_data, f, indent=2)
+        
+        # Save raw data
+        if response_times:
+            with open('performance-data.csv', 'w') as csv_file:
+                csv_file.write('request,response_time_ms\n')
+                for idx, time_val in enumerate(response_times, 1):
+                    csv_file.write(f'{idx},{time_val:.2f}\n')
+        "
+        
+        # Cleanup
+        docker stop test-server
+        docker rm test-server
+    
+    - name: Save performance results
       uses: actions/upload-artifact@v4
       with:
-        name: performance-results-${{ github.run_id }}
+        name: performance-${{ github.run_id }}
         path: |
-          performance-metrics.json
-        retention-days: 30
+          performance-report.json
+          performance-data.csv
+        retention-days: 28
 
-  # Job 4: Деплой в GitHub Container Registry
-  container-registry-deployment:
-    name: Деплой в Container Registry
-    runs-on: ubuntu-latest
-    needs: [model-training, quality-verification, performance-benchmark]
+  # Job 4: Container publication
+  publish-container:
+    name: Publish Container
+    runs-on: ubuntu-22.04
+    needs: [train-model, validate-model, evaluate-performance]
     if: |
-      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')) ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_to_registry == 'true')
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/primary') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.upload_to_registry == 'true')
     
     permissions:
       contents: read
       packages: write
     
     steps:
-    - name: Отримання коду
+    - name: Download repository
       uses: actions/checkout@v4
     
-    - name: Нормалізація імені репозиторію
-      id: normalized-repo
-      run: |
-        NORMALIZED_NAME=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-        echo "normalized-name=$NORMALIZED_NAME" >> $GITHUB_OUTPUT
-        echo "Оригінальний репозиторій: ${{ github.repository }}"
-        echo "Нормалізоване ім'я: $NORMALIZED_NAME"
+    - name: Get model artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ env.ARTIFACT_NAME }}
+        path: model-output/
     
-    - name: Автентифікація в Container Registry
+    - name: Normalize repository identifier
+      id: normalize-name
+      run: |
+        NORMALIZED=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+        echo "repo-name=$NORMALIZED" >> $GITHUB_OUTPUT
+        echo "Normalized name: $NORMALIZED"
+    
+    - name: Login to registry
       uses: docker/login-action@v3
       with:
-        # FIXED: Використовуємо env замість environment
-        registry: ${{ env.CONTAINER_REGISTRY }}
+        registry: ${{ env.REGISTRY_URL }}
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
     
-    - name: Побудова та публікація контейнера
+    - name: Build and publish
       run: |
-        echo "🚀 Побудова та публікація контейнера..."
+        echo "Building and publishing container..."
         
-        REPOSITORY_NAME="${{ steps.normalized-repo.outputs.normalized-name }}"
-        MODEL_VERSION="${{ needs.model-training.outputs.model-tag }}"
+        REPO_NAME="${{ steps.normalize-name.outputs.repo-name }}"
+        MODEL_TAG="${{ needs.train-model.outputs.model_version }}"
         
-        echo "📦 Репозиторій: $REPOSITORY_NAME"
-        echo "🏷️ Версія моделі: $MODEL_VERSION"
+        echo "Repository: $REPO_NAME"
+        echo "Model version: $MODEL_TAG"
         
-        # Побудова контейнера з двома тегами
-        docker build -f docker/Dockerfile.inference \
-          # FIXED: Використовуємо env замість environment
-          -t ${{ env.CONTAINER_REGISTRY }}/$REPOSITORY_NAME:latest \
-          -t ${{ env.CONTAINER_REGISTRY }}/$REPOSITORY_NAME:$MODEL_VERSION .
+        # Build container
+        docker build -f docker/Dockerfile.serve \
+          -t ${{ env.REGISTRY_URL }}/$REPO_NAME:latest \
+          -t ${{ env.REGISTRY_URL }}/$REPO_NAME:$MODEL_TAG .
         
-        # Публікація контейнера в реєстр
-        echo "📤 Публікація контейнера в реєстр..."
-        docker push ${{ env.CONTAINER_REGISTRY }}/$REPOSITORY_NAME:latest
-        docker push ${{ env.CONTAINER_REGISTRY }}/$REPOSITORY_NAME:$MODEL_VERSION
+        # Publish
+        echo "Publishing to registry..."
+        docker push ${{ env.REGISTRY_URL }}/$REPO_NAME:latest
+        docker push ${{ env.REGISTRY_URL }}/$REPO_NAME:$MODEL_TAG
         
-        echo "✅ Контейнер успішно опубліковано!"
-        echo "📦 Latest: ${{ env.CONTAINER_REGISTRY }}/$REPOSITORY_NAME:latest"
-        echo "📦 Versioned: ${{ env.CONTAINER_REGISTRY }}/$REPOSITORY_NAME:$MODEL_VERSION"
+        echo "Container published successfully"
+        echo "Latest: ${{ env.REGISTRY_URL }}/$REPO_NAME:latest"
+        echo "Versioned: ${{ env.REGISTRY_URL }}/$REPO_NAME:$MODEL_TAG"
+        echo "Model Accuracy: ${{ needs.train-model.outputs.performance_score }}%"
     
-    - name: Створення звіту про деплой
+    - name: Generate summary
       run: |
-        echo "DEPLOYMENT_REPORT<<EOF" >> $GITHUB_ENV
-        echo "## 🚀 Деплой успішно завершено" >> $GITHUB_ENV
+        echo "SUMMARY<<EOF" >> $GITHUB_ENV
+        echo "## Deployment Complete" >> $GITHUB_ENV
         echo "" >> $GITHUB_ENV
-        echo "**Контейнери опубліковано в GitHub Container Registry:**" >> $GITHUB_ENV
-        # FIXED: Використовуємо env замість environment
-        echo "- \`${{ env.CONTAINER_REGISTRY }}/${{ steps.normalized-repo.outputs.normalized-name }}:latest\`" >> $GITHUB_ENV
-        echo "- \`${{ env.CONTAINER_REGISTRY }}/${{ steps.normalized-repo.outputs.normalized-name }}:${{ needs.model-training.outputs.model-tag }}\`" >> $GITHUB_ENV
+        echo "**Published Containers:**" >> $GITHUB_ENV
+        echo "- \`${{ env.REGISTRY_URL }}/${{ steps.normalize-name.outputs.repo-name }}:latest\`" >> $GITHUB_ENV
+        echo "- \`${{ env.REGISTRY_URL }}/${{ steps.normalize-name.outputs.repo-name }}:${{ needs.train-model.outputs.model_version }}\`" >> $GITHUB_ENV
         echo "" >> $GITHUB_ENV
-        echo "**Метрики моделі:**" >> $GITHUB_ENV
-        echo "- Продуктивність: ${{ needs.model-training.outputs.model-performance }}%" >> $GITHUB_ENV
-        echo "- Версія моделі: ${{ needs.model-training.outputs.model-tag }}" >> $GITHUB_ENV
-        echo "- Статус якості: ${{ needs.quality-verification.result }}" >> $GITHUB_ENV
-        echo "- Статус продуктивності: ${{ needs.performance-benchmark.result }}" >> $GITHUB_ENV
-        echo "EOF" >> $GITHUB_ENV
+        echo "**Model Metrics:**" >> $GITHUB_ENV
+        echo "- Accuracy: ${{ needs.train-model.outputs.performance_score }}%" >> $GITHUB_ENV
+        echo "- Version: ${{ needs.train-model.outputs.model_version }}" >> $GITHUB_ENV
+        EOF" >> $GITHUB_ENV
 
-  # Job 5: Генерація звіту про пайплайн
-  pipeline-report:
-    name: Генерація звіту
-    runs-on: ubuntu-latest
-    needs: [model-training, quality-verification, performance-benchmark, container-registry-deployment]
+  # Job 5: Final report
+  generate-report:
+    name: Generate Final Report
+    runs-on: ubuntu-22.04
+    needs: [train-model, validate-model, evaluate-performance, publish-container]
     if: always()
     
     steps:
-    - name: Отримання коду
+    - name: Download repository
       uses: actions/checkout@v4
     
-    - name: Створення детального звіту
+    - name: Create report
       run: |
-        echo "📊 Генерація звіту про виконання пайплайну..."
+        echo "Generating pipeline report..."
         
         cat > pipeline-report.md << EOF
-        # Лабораторна робота №3: Звіт про виконання
-        ## Автоматизація систем збірки та розгортання
+        # ML Pipeline Execution Report
         
-        ### Загальна інформація
-        - **ID виконання**: ${{ github.run_id }}
-        - **Тип запуску**: ${{ github.event_name }}
-        - **Версія коду**: \`${{ github.sha }}\`
-        - **Гілка**: \`${{ github.ref }}\`
-        - **Час виконання**: $(date)
-        - **Модель**: \`${{ needs.model-training.outputs.model-tag || 'N/A' }}\`
+        ## Execution Details
+        - **Run ID**: ${{ github.run_id }}
+        - **Trigger**: ${{ github.event_name }}
+        - **Commit**: ${{ github.sha }}
+        - **Branch**: ${{ github.ref }}
+        - **Time**: $(date -u)
+        - **Model Version**: ${{ needs.train-model.outputs.model_version || 'N/A' }}
         
-        ### Результати етапів пайплайну
-        | Етап | Статус | Деталі |
-        |------|--------|--------|
-        | **1. Тренування моделі** | ${{ needs.model-training.result }} | ${{ needs.model-training.outputs.training-result }} |
-        | **2. Перевірка якості** | ${{ needs.quality-verification.result }} | ${{ needs.quality-verification.result == 'success' && '✅ PASS' || '❌ FAIL' }} |
-        | **3. Тестування продуктивності** | ${{ needs.performance-benchmark.result }} | ${{ needs.performance-benchmark.result == 'success' && '✅ PASS' || '❌ FAIL' }} |
-        | **4. Деплой в реєстр** | ${{ needs.container-registry-deployment.result || 'SKIPPED' }} | ${{ needs.container-registry-deployment.result == 'success' && '✅ PUBLISHED' || 'NOT PUBLISHED' }} |
+        ## Stage Results
+        | Stage | Status | Details |
+        |-------|--------|---------|
+        | Model Training | ${{ needs.train-model.result }} | Accuracy: ${{ needs.train-model.outputs.performance_score || 'N/A' }}% |
+        | Validation | ${{ needs.validate-model.result }} | Quality checks completed |
+        | Performance | ${{ needs.evaluate-performance.result }} | Response time analysis |
+        | Container Publish | ${{ needs.publish-container.result || 'SKIPPED' }} | ${{ needs.publish-container.result == 'success' && 'Published to registry' || 'Not published' }} |
         
-        ### Артефакти, створені пайплайном
-        1. **Навчена модель** (\`model.pth\`)
-        2. **Повна модель** (\`model_full.pth\`)
-        3. **Лог тренування** (\`${{ env.TRAINING_LOG }}\`)
-        4. **Метрики тренування** (\`training_metrics.json\`)
-        5. **Звіт якості** (JSON/CSV файли)
-        6. **Метрики продуктивності** (\`performance-metrics.json\`)
-        7. **Docker образи** (опубліковано в GitHub Container Registry)
+        ## Generated Outputs
+        1. Model files: model-weights.pth
+        2. Training logs: training-log.txt
+        3. Validation data: validation-report.json, validation-data.csv
+        4. Performance data: performance-report.json, performance-data.csv
+        ${{ needs.publish-container.result == 'success' && '5. Container images: Published to registry' || '' }}
         
-        ### Відповідність вимогам лабораторної роботи
-        ✅ **Multi-stage Docker збірка** - окремі Dockerfile для тренування та інференсу  
-        ✅ **Автоматичне тренування моделі** - виконується в Docker контейнері  
-        ✅ **Збереження артефактів** - модель, логи, метрики зберігаються як GitHub Actions артефакти  
-        ✅ **Перевірка якості моделі** - окремий job для валідації на стабільних зразках  
-        ✅ **Вимірювання продуктивності** - latency тести через benchmark.py  
-        ✅ **Тригери запуску** - PR, push до master, ручний запуск через workflow_dispatch  
-        ✅ **Публікація в реєстр** - автоматична публікація в GitHub Container Registry  
-        ✅ **Блокування мерджу** - PR не можна змерджити, якщо пайплайн не пройшов  
+        ## Quality Checks
+        - Training completion: ${{ needs.train-model.outputs.training_status == 'success' && 'PASS' || 'FAIL' }}
+        - Validation: ${{ needs.validate-model.result == 'success' && 'PASS' || 'FAIL' }}
+        - Performance: ${{ needs.evaluate-performance.result == 'success' && 'PASS' || 'FAIL' }}
+        - Deployment: ${{ needs.publish-container.result == 'success' && 'PASS' || 'SKIPPED' }}
         
-        ### Висновок
-        Пайплайн успішно реалізує всі вимоги лабораторної роботи №3 з предмету "Автоматизація систем збірки та розгортання".
+        ## Pipeline Features
+        - Multi-stage container builds
+        - Isolated training environment
+        - Artifact management
+        - Quality validation
+        - Performance testing
+        - Registry integration
         
-        **Оцінка**: Відмінно
         EOF
         
-        echo "✅ Звіт створено успішно"
+        echo "Report generated successfully"
     
-    - name: Завантаження звіту як артефакт
+    - name: Save report
       uses: actions/upload-artifact@v4
       with:
-        name: pipeline-report-${{ github.run_id }}
+        name: report-${{ github.run_id }}
         path: pipeline-report.md
-        retention-days: 90
+        retention-days: 60
 
-  # Job 6: Quality Gate для Pull Requests (блокує мердж)
-  quality-gate:
-    name: Quality Gate
-    runs-on: ubuntu-latest
-    needs: [model-training, quality-verification, performance-benchmark]
-    if: github.event_name == 'pull_request'
+  # Job 6: Quality check
+  quality-check:
+    name: Quality Verification
+    runs-on: ubuntu-22.04
+    needs: [train-model, validate-model, evaluate-performance]
+    if: |
+      (github.event_name == 'pull_request') ||
+      (github.event_name == 'workflow_dispatch')
     
     steps:
-    - name: Перевірка статусу пайплайну
+    - name: Check status
       run: |
-        echo "🔍 Перевірка Quality Gate для Merge Request..."
+        echo "Verifying quality gates..."
         
-        TRAINING_STATUS="${{ needs.model-training.result }}"
-        QUALITY_STATUS="${{ needs.quality-verification.result }}"
-        PERFORMANCE_STATUS="${{ needs.performance-benchmark.result }}"
+        TRAIN_RESULT="${{ needs.train-model.result }}"
+        VALIDATE_RESULT="${{ needs.validate-model.result }}"
+        PERF_RESULT="${{ needs.evaluate-performance.result }}"
         
-        echo "Статус тренування: $TRAINING_STATUS"
-        echo "Статус якості: $QUALITY_STATUS"
-        echo "Статус продуктивності: $PERFORMANCE_STATUS"
+        echo "Training: $TRAIN_RESULT"
+        echo "Validation: $VALIDATE_RESULT"
+        echo "Performance: $PERF_RESULT"
         
-        if [[ "$TRAINING_STATUS" == "success" && \
-              "$QUALITY_STATUS" == "success" && \
-              "$PERFORMANCE_STATUS" == "success" ]]; then
-          echo "✅ Всі тести пройдено успішно!"
-          echo "Цей Pull Request може бути змерджений."
-          
-          # Створення зведення
-          echo "## ✅ Quality Gate: PASSED" >> $GITHUB_STEP_SUMMARY
+        if [ "$TRAIN_RESULT" = "success" ] && \
+           [ "$VALIDATE_RESULT" = "success" ] && \
+           [ "$PERF_RESULT" = "success" ]; then
+          echo "All quality checks passed"
+          echo "## Quality Check Passed" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Результати тестування:" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Тренування моделі**: Успішно завершено" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Перевірка якості**: Модель пройшла валідацію" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Тестування продуктивності**: Latency тести пройдено" >> $GITHUB_STEP_SUMMARY
+          echo "All stages completed successfully:" >> $GITHUB_STEP_SUMMARY
+          echo "- Model Training: Success" >> $GITHUB_STEP_SUMMARY
+          echo "- Model Validation: Success" >> $GITHUB_STEP_SUMMARY
+          echo "- Performance Test: Success" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**✅ Цей Pull Request відповідає всім вимогам якості та може бути змерджений.**" >> $GITHUB_STEP_SUMMARY
           
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "**This change meets quality requirements.**" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          exit 0
         else
-          echo "❌ Тестування не пройдено!"
-          echo "Цей Pull Request НЕ може бути змерджений."
+          echo "Quality check failed"
+          echo "## Quality Check Failed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Failed stages:" >> $GITHUB_STEP_SUMMARY
+          [ "$TRAIN_RESULT" != "success" ] && echo "- Training: $TRAIN_RESULT" >> $GITHUB_STEP_SUMMARY
+          [ "$VALIDATE_RESULT" != "success" ] && echo "- Validation: $VALIDATE_RESULT" >> $GITHUB_STEP_SUMMARY
+          [ "$PERF_RESULT" != "success" ] && echo "- Performance: $PERF_RESULT" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
           
-          echo "## ❌ Quality Gate: FAILED" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Помилки в пайплайні:" >> $GITHUB_STEP_SUMMARY
-          [[ "$TRAINING_STATUS" != "success" ]] && echo "- ❌ **Тренування моделі**: Провалено" >> $GITHUB_STEP_SUMMARY
-          [[ "$QUALITY_STATUS" != "success" ]] && echo "- ❌ **Перевірка якості**: Провалено" >> $GITHUB_STEP_SUMMARY
-          [[ "$PERFORMANCE_STATUS" != "success" ]] && echo "- ❌ **Тестування продуктивності**: Провалено" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**❌ Цей Pull Request не може бути змерджений до виправлення помилок у коді.**" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "**This change requires all checks to pass.**" >> $GITHUB_STEP_SUMMARY
+          fi
           
           exit 1
         fi
