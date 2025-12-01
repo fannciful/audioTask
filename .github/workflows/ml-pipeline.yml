@@ -23,7 +23,7 @@ on:
   # Merge request validation
   pull_request:
     branches: [ primary, main, development ]
-    types: [opened, synchronize, reopened, ready_forview]
+    types: [opened, synchronize, reopened, ready_for_review]
   
   # Automatic deployment on main branch
   push:
@@ -188,10 +188,10 @@ except:
         
         # Create a simple validation script
         cat > validate_model.py << 'EOF'
-import torch
-import json
-import os
-import sys
+    import torch
+    import json
+    import os
+    import sys
 
 print('Checking model directory...')
 
@@ -421,12 +421,12 @@ EOF
         
         # Create a simple performance test script
         cat > performance_test.py << 'EOF'
-import requests
-import time
-import json
-import io
-import numpy as np
-import soundfile as sf
+    import requests
+    import time
+    import json
+    import io
+    import numpy as np
+    import soundfile as sf
 
 def generate_test_audio():
     """Generate simple test audio"""
