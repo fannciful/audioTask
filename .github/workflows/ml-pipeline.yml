@@ -23,7 +23,7 @@ on:
   # Merge request validation
   pull_request:
     branches: [ primary, main, development ]
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_forview]
   
   # Automatic deployment on main branch
   push:
@@ -77,7 +77,7 @@ jobs:
     - name: Create training environment
       run: |
         echo "Creating training environment..."
-        docker build -f docker/Dockerfile.train -t model-trainer:latest .
+        docker build -f Dockerfile.train -t model-trainer:latest .
     
     - name: Run training process
       id: execute-training
@@ -91,8 +91,8 @@ jobs:
         docker run --rm \
           -v $(pwd)/model-output:/app/artifacts \
           -v $(pwd)/data:/app/data \
-          -e TRAINING_ITERATIONS=${{ github.event.inputs.training_cycles || '3' }} \
-          -e SAMPLE_SIZE=${{ github.event.inputs.compact_dataset && '100' || '500' }} \
+          -e EPOCHS=${{ github.event.inputs.training_cycles || '3' }} \
+          -e SAMPLES_PER_CLASS=${{ github.event.inputs.compact_dataset && '10' || '50' }} \
           model-trainer:latest
         
         # Check for successful training
@@ -100,19 +100,26 @@ jobs:
         echo "Files in model-output directory:"
         ls -la model-output/ || true
         
-        if [ -f "model-output/model.pth" ] || [ -f "model-output/model_full.pth" ] || [ -f "model-output/neural-network.pth" ]; then
+        if [ -f "model-output/model.pth" ] || [ -f "model-output/model_full.pth" ]; then
           echo "Training completed successfully - model files found"
           echo "training-status=success" >> $GITHUB_OUTPUT
           
-          # Try to extract performance score
-          if [ -f "model-output/training.log" ]; then
-            # Look for accuracy in the log file
-            ACCURACY=$(grep -i "accuracy\|Accuracy" model-output/training.log | tail -1 | grep -o '[0-9]*\.[0-9]*' | head -1 || echo "25.0")
+          # Try to extract performance score from training_metrics.json
+          if [ -f "model-output/training_metrics.json" ]; then
+            ACCURACY=$(python3 -c "
+import json
+try:
+    with open('model-output/training_metrics.json', 'r') as f:
+        data = json.load(f)
+    print(data.get('final_metrics', {}).get('test_accuracy', '25.0'))
+except:
+    print('25.0')
+" 2>/dev/null || echo "25.0")
             echo "performance-score=$ACCURACY" >> $GITHUB_OUTPUT
             echo "Model Accuracy: $ACCURACY%"
-          elif [ -f "model-output/training_metrics.json" ]; then
-            # Extract from JSON if available
-            ACCURACY=$(python3 -c "import json; data=json.load(open('model-output/training_metrics.json')); print(data.get('final_accuracy', '25.0'))" 2>/dev/null || echo "25.0")
+          elif [ -f "model-output/training.log" ]; then
+            # Look for accuracy in the log file
+            ACCURACY=$(grep -i "Final Accuracy" model-output/training.log | grep -o '[0-9]*\.[0-9]*' | head -1 || echo "25.0")
             echo "performance-score=$ACCURACY" >> $GITHUB_OUTPUT
             echo "Model Accuracy: $ACCURACY%"
           else
@@ -131,7 +138,7 @@ jobs:
     - name: Create inference environment
       run: |
         echo "Creating inference environment..."
-        docker build -f docker/Dockerfile.serve -t model-server:latest .
+        docker build -f Dockerfile.inference -t model-server:latest .
     
     - name: Save training artifacts
       uses: actions/upload-artifact@v4
@@ -165,7 +172,8 @@ jobs:
     
     - name: Install dependencies
       run: |
-        pip install -r requirements.txt
+        echo "Installing validation dependencies..."
+        pip install torch torchaudio numpy
     
     - name: Check available files
       run: |
@@ -178,169 +186,170 @@ jobs:
       run: |
         echo "Running model validation..."
         
-        python3 -c "
-        import torch
-        import json
-        import os
-        import sys
+        # Create a simple validation script
+        cat > validate_model.py << 'EOF'
+import torch
+import json
+import os
+import sys
+
+print('Checking model directory...')
+
+# Check for different possible model file names
+model_files = ['model-output/model.pth', 'model-output/model_full.pth']
+model_path = None
+
+# First, list all files
+print('Files in model-output:')
+for root, dirs, files in os.walk('model-output'):
+    for file in files:
+        print(f'  {os.path.join(root, file)}')
+        if file.endswith('.pth'):
+            model_path = os.path.join(root, file)
+
+if model_path is None:
+    print('ERROR: No model file found')
+    print('Current directory contents:')
+    os.system('find . -name "*.pth" -type f 2>/dev/null || echo "No .pth files"')
+    sys.exit(1)
+
+print(f'Loading model from: {model_path}')
+
+try:
+    # Load class info
+    class_info_path = 'model-output/class_info.json'
+    if os.path.exists(class_info_path):
+        with open(class_info_path, 'r') as f:
+            class_info = json.load(f)
+            target_classes = class_info.get('target_classes', ['yes', 'no', 'up', 'down'])
+    else:
+        target_classes = ['yes', 'no', 'up', 'down']
+    
+    print(f'Target classes: {target_classes}')
+    
+    # Try to load the model
+    device = torch.device('cpu')
+    
+    # First, try to load as complete model
+    try:
+        model = torch.load(model_path, map_location=device)
+        print('Model loaded as complete object')
         
-        print('Checking model directory...')
+        # Check if it's actually a model object
+        if not hasattr(model, 'eval'):
+            print('Loaded object is not a model, trying state dict...')
+            raise ValueError('Not a model')
+            
+    except Exception as e1:
+        print(f'Complete model load failed: {e1}')
         
-        # Check for different possible model file names
-        model_files = ['model-output/model.pth', 'model-output/model_full.pth', 'model-output/neural-network.pth']
-        model_path = None
+        # Try to load as state dict - define the model architecture first
+        class AudioClassifier(torch.nn.Module):
+            def __init__(self, num_classes=4):
+                super().__init__()
+                self.conv1 = torch.nn.Conv2d(1, 8, kernel_size=3, stride=1, padding=1)
+                self.conv2 = torch.nn.Conv2d(8, 16, kernel_size=3, stride=1, padding=1)
+                self.conv3 = torch.nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1)
+                self.pool = torch.nn.MaxPool2d(2)
+                self.relu = torch.nn.ReLU()
+                self.dropout = torch.nn.Dropout(0.3)
+                self.gap = torch.nn.AdaptiveAvgPool2d((4, 2))
+                self.fc1 = torch.nn.Linear(32 * 4 * 2, 64)
+                self.fc2 = torch.nn.Linear(64, num_classes)
+            
+            def forward(self, x):
+                x = self.pool(self.relu(self.conv1(x)))
+                x = self.pool(self.relu(self.conv2(x)))
+                x = self.pool(self.relu(self.conv3(x)))
+                x = self.gap(x)
+                x = x.view(x.size(0), -1)
+                x = self.relu(self.fc1(self.dropout(x)))
+                x = self.fc2(self.dropout(x))
+                return x
         
-        # First, list all files
-        print('Files in model-output:')
-        for root, dirs, files in os.walk('model-output'):
-            for file in files:
-                print(f'  {os.path.join(root, file)}')
-                if file.endswith('.pth'):
-                    model_path = os.path.join(root, file)
+        model = AudioClassifier(num_classes=len(target_classes))
+        model.load_state_dict(torch.load(model_path, map_location=device))
+        print('Model loaded via state dict')
+    
+    model.eval()
+    
+    print('Running validation tests...')
+    test_results = []
+    
+    for test_num in range(20):
+        # Create synthetic input matching the expected shape [1, 1, 32, 32]
+        input_tensor = torch.randn(1, 1, 32, 32)
         
-        # If still not found, search recursively
-        if model_path is None:
-            for root, dirs, files in os.walk('.'):
-                for file in files:
-                    if file.endswith('.pth'):
-                        model_path = os.path.join(root, file)
-                        print(f'Found model file: {model_path}')
-                        break
-                if model_path:
-                    break
+        with torch.no_grad():
+            output = model(input_tensor)
+            predicted = torch.argmax(output).item()
+            confidence = torch.nn.functional.softmax(output, dim=1)[0][predicted].item()
         
-        if model_path is None:
-            print('ERROR: No model file found in any location')
-            print('Current directory contents:')
-            os.system('find . -name \"*.pth\" -type f 2>/dev/null || echo \"No .pth files\"')
-            sys.exit(1)
+        # Use modulo to ensure we have a valid index
+        class_idx = predicted % len(target_classes)
         
-        print(f'Loading model from: {model_path}')
+        test_results.append({
+            'test_id': test_num,
+            'prediction': predicted,
+            'confidence': round(confidence, 4),
+            'label': target_classes[class_idx]
+        })
+    
+    # Analyze results
+    successful = len([r for r in test_results if r['confidence'] > 0.15])
+    avg_confidence = sum(r['confidence'] for r in test_results) / len(test_results) if test_results else 0
+    
+    validation_report = {
+        'total_tests': len(test_results),
+        'passed_tests': successful,
+        'pass_rate': successful / len(test_results) if test_results else 0,
+        'avg_confidence': avg_confidence,
+        'validation_status': 'PASS' if successful >= 15 else 'FAIL',
+        'test_details': test_results,
+        'model_source': model_path,
+        'target_classes': target_classes
+    }
+    
+    # Save results
+    os.makedirs('model-output', exist_ok=True)
+    with open('model-output/validation-report.json', 'w') as f:
+        json.dump(validation_report, f, indent=2)
+    
+    # Save CSV data
+    with open('model-output/validation-data.csv', 'w') as csv_file:
+        csv_file.write('test_id,prediction,confidence,label\n')
+        for result in test_results:
+            csv_file.write(f'{result["test_id"]},{result["prediction"]},{result["confidence"]},{result["label"]}\n')
+    
+    print(f'Validation complete!')
+    print(f'Success rate: {validation_report["pass_rate"]:.1%}')
+    print(f'Average confidence: {validation_report["avg_confidence"]:.3f}')
+    print(f'Status: {validation_report["validation_status"]}')
+    
+except Exception as e:
+    print(f'Error during validation: {e}')
+    import traceback
+    traceback.print_exc()
+    
+    # Create a basic validation report even if validation fails
+    validation_report = {
+        'total_tests': 0,
+        'passed_tests': 0,
+        'pass_rate': 0,
+        'avg_confidence': 0,
+        'validation_status': 'ERROR',
+        'error': str(e),
+        'model_source': model_path if 'model_path' in locals() else 'unknown'
+    }
+    
+    os.makedirs('model-output', exist_ok=True)
+    with open('model-output/validation-report.json', 'w') as f:
+        json.dump(validation_report, f, indent=2)
+    
+    sys.exit(1)
+EOF
         
-        try:
-            # Try different loading strategies
-            model = None
-            
-            # Strategy 1: Try to load as complete model
-            try:
-                model = torch.load(model_path, map_location='cpu')
-                print('Model loaded as complete object')
-                # Check if it's actually a model object
-                if not hasattr(model, 'eval'):
-                    # Might be state dict, try strategy 2
-                    raise ValueError('Loaded object is not a model')
-            except Exception as e1:
-                print(f'Complete load failed: {e1}')
-                
-                # Strategy 2: Try to load as state dict with model architecture
-                try:
-                    # Try to import the model architecture
-                    from model_architecture import NeuralNetwork
-                    model = NeuralNetwork(category_count=4)
-                    model.load_state_dict(torch.load(model_path, map_location='cpu'))
-                    print('Model loaded via state dict')
-                except Exception as e2:
-                    print(f'State dict load failed: {e2}')
-                    
-                    # Strategy 3: Create simple model for testing
-                    print('Creating simple model for validation...')
-                    import torch.nn as nn
-                    
-                    class SimpleModel(nn.Module):
-                        def __init__(self):
-                            super(SimpleModel, self).__init__()
-                            self.conv1 = nn.Conv2d(1, 16, kernel_size=3, padding=1)
-                            self.conv2 = nn.Conv2d(16, 32, kernel_size=3, padding=1)
-                            self.fc1 = nn.Linear(32 * 8 * 8, 128)
-                            self.fc2 = nn.Linear(128, 4)
-                            self.pool = nn.MaxPool2d(2, 2)
-                            self.relu = nn.ReLU()
-                            self.dropout = nn.Dropout(0.5)
-                        
-                        def forward(self, x):
-                            x = self.pool(self.relu(self.conv1(x)))
-                            x = self.pool(self.relu(self.conv2(x)))
-                            x = x.view(-1, 32 * 8 * 8)
-                            x = self.relu(self.fc1(x))
-                            x = self.dropout(x)
-                            x = self.fc2(x)
-                            return x
-                    
-                    model = SimpleModel()
-                    print('Using simple validation model')
-            
-            model.eval()
-            
-            print('Running validation tests...')
-            test_results = []
-            
-            for test_num in range(20):
-                input_tensor = torch.randn(1, 1, 32, 32)
-                
-                with torch.no_grad():
-                    output = model(input_tensor)
-                    predicted = torch.argmax(output).item()
-                    confidence = torch.nn.functional.softmax(output, dim=1)[0][predicted].item()
-                
-                test_results.append({
-                    'test_id': test_num,
-                    'prediction': predicted,
-                    'confidence': round(confidence, 4),
-                    'label': ['yes', 'no', 'up', 'down'][predicted % 4]  # Use modulo for safety
-                })
-            
-            # Analyze results
-            successful = len([r for r in test_results if r['confidence'] > 0.15])
-            avg_confidence = sum(r['confidence'] for r in test_results) / len(test_results) if test_results else 0
-            
-            validation_report = {
-                'total_tests': len(test_results),
-                'passed_tests': successful,
-                'pass_rate': successful / len(test_results) if test_results else 0,
-                'avg_confidence': avg_confidence,
-                'validation_status': 'PASS' if successful >= 15 else 'FAIL',
-                'test_details': test_results,
-                'model_source': model_path
-            }
-            
-            # Save results
-            os.makedirs('model-output', exist_ok=True)
-            with open('model-output/validation-report.json', 'w') as f:
-                json.dump(validation_report, f, indent=2)
-            
-            # Save CSV data
-            with open('model-output/validation-data.csv', 'w') as csv_file:
-                csv_file.write('test_id,prediction,confidence,label\\n')
-                for result in test_results:
-                    csv_file.write(f'{result[\"test_id\"]},{result[\"prediction\"]},{result[\"confidence\"]},{result[\"label\"]}\\n')
-            
-            print(f'Validation complete!')
-            print(f'Success rate: {validation_report[\"pass_rate\"]:.1%}')
-            print(f'Average confidence: {validation_report[\"avg_confidence\"]:.3f}')
-            print(f'Status: {validation_report[\"validation_status\"]}')
-            
-        except Exception as e:
-            print(f'Error during validation: {e}')
-            import traceback
-            traceback.print_exc()
-            
-            # Create a basic validation report even if validation fails
-            validation_report = {
-                'total_tests': 0,
-                'passed_tests': 0,
-                'pass_rate': 0,
-                'avg_confidence': 0,
-                'validation_status': 'ERROR',
-                'error': str(e),
-                'model_source': model_path if 'model_path' in locals() else 'unknown'
-            }
-            
-            os.makedirs('model-output', exist_ok=True)
-            with open('model-output/validation-report.json', 'w') as f:
-                json.dump(validation_report, f, indent=2)
-            
-            sys.exit(1)
-        "
+        python3 validate_model.py
     
     - name: Save validation results
       uses: actions/upload-artifact@v4
@@ -368,97 +377,142 @@ jobs:
         name: ${{ env.ARTIFACT_NAME }}
         path: model-output/
     
-    - name: Build server
+    - name: Copy model files to root for inference server
+      run: |
+        echo "Copying model files for inference..."
+        cp model-output/model.pth . 2>/dev/null || true
+        cp model-output/class_info.json . 2>/dev/null || true
+        cp model-output/training_metrics.json . 2>/dev/null || true
+    
+    - name: Build inference server
       run: |
         echo "Building inference server..."
-        docker build -f docker/Dockerfile.serve -t model-server:latest .
+        docker build -f Dockerfile.inference -t model-server:latest .
     
     - name: Install tools
       run: |
         echo "Installing performance tools..."
-        pip install requests
+        pip install requests soundfile
     
     - name: Run performance test
       run: |
         echo "Running performance evaluation..."
         
-        # Start server
-        docker run -d --name test-server -p 8080:8080 model-server:latest
+        # Start server in background
+        docker run -d --name test-server -p 5000:5000 model-server:latest
         
-        # Wait for startup
-        echo "Waiting for server..."
-        sleep 20
+        # Wait for startup with retries
+        echo "Waiting for server to start..."
+        for i in {1..10}; do
+          if curl -s http://localhost:5000/health > /dev/null; then
+            echo "Server is up!"
+            break
+          fi
+          echo "Waiting... ($i/10)"
+          sleep 5
+        done
         
-        # Run tests
-        python3 -c "
-        import requests
-        import time
-        import json
+        # Check if server is actually running
+        if ! curl -s http://localhost:5000/health > /dev/null; then
+          echo "ERROR: Server failed to start"
+          docker logs test-server || true
+          exit 1
+        fi
         
-        print('Starting performance tests...')
-        response_times = []
+        # Create a simple performance test script
+        cat > performance_test.py << 'EOF'
+import requests
+import time
+import json
+import io
+import numpy as np
+import soundfile as sf
+
+def generate_test_audio():
+    """Generate simple test audio"""
+    sample_rate = 16000
+    duration = 1.0
+    t = np.linspace(0, duration, int(sample_rate * duration))
+    audio_data = 0.5 * np.sin(2 * np.pi * 440 * t)
+    
+    buffer = io.BytesIO()
+    sf.write(buffer, audio_data, sample_rate, format='WAV')
+    buffer.seek(0)
+    return buffer
+
+print('Starting performance tests...')
+response_times = []
+
+# Test health endpoint first
+health_start = time.time()
+try:
+    health_resp = requests.get('http://localhost:5000/health', timeout=10)
+    health_time = (time.time() - health_start) * 1000
+    print(f'Health check: {health_time:.2f}ms (HTTP {health_resp.status_code})')
+except Exception as e:
+    print(f'Health check failed: {e}')
+
+# Test prediction endpoint
+for i in range(5):  # Reduced number of requests for CI/CD
+    try:
+        # Generate test audio
+        audio_buffer = generate_test_audio()
         
-        # Test health endpoint with retries
-        max_retries = 5
-        for i in range(20):
-            for retry in range(max_retries):
-                try:
-                    start = time.time()
-                    resp = requests.get('http://localhost:8080/health', timeout=5)
-                    end = time.time()
-                    
-                    if resp.status_code == 200:
-                        latency = (end - start) * 1000
-                        response_times.append(latency)
-                        print(f'Request {i+1}: {latency:.2f}ms')
-                        break
-                    else:
-                        if retry == max_retries - 1:
-                            print(f'Request {i+1}: HTTP {resp.status_code}')
-                        else:
-                            time.sleep(1)
-                except Exception as e:
-                    if retry == max_retries - 1:
-                        print(f'Request {i+1} failed: {e}')
-                    else:
-                        time.sleep(1)
+        files = {'file': ('test.wav', audio_buffer, 'audio/wav')}
         
-        # Calculate metrics
-        if response_times:
-            import statistics
-            performance_data = {
-                'total_requests': 20,
-                'successful': len(response_times),
-                'success_rate': len(response_times) / 20,
-                'avg_response_ms': statistics.mean(response_times),
-                'min_response_ms': min(response_times),
-                'max_response_ms': max(response_times),
-                'p95_ms': sorted(response_times)[int(len(response_times)*0.95)] if len(response_times) >= 5 else statistics.mean(response_times)
-            }
-            
-            print(f'Performance test complete!')
-            print(f'Success rate: {performance_data[\"success_rate\"]:.1%}')
-            print(f'Average response: {performance_data[\"avg_response_ms\"]:.2f}ms')
+        start = time.time()
+        response = requests.post('http://localhost:5000/predict', files=files, timeout=30)
+        end = time.time()
+        
+        if response.status_code == 200:
+            latency = (end - start) * 1000
+            response_times.append(latency)
+            result = response.json()
+            print(f'Request {i+1}: {latency:.2f}ms -> {result.get("prediction", "unknown")}')
         else:
-            performance_data = {
-                'error': 'No successful requests',
-                'total_requests': 20,
-                'successful': 0,
-                'success_rate': 0
-            }
-            print('Performance test failed - no successful requests')
+            print(f'Request {i+1}: HTTP {response.status_code}')
+            
+    except Exception as e:
+        print(f'Request {i+1} failed: {e}')
+
+# Calculate metrics
+if response_times:
+    import statistics
+    performance_data = {
+        'total_requests': 5,
+        'successful': len(response_times),
+        'success_rate': len(response_times) / 5,
+        'avg_response_ms': statistics.mean(response_times),
+        'min_response_ms': min(response_times),
+        'max_response_ms': max(response_times),
+        'p95_ms': sorted(response_times)[-1] if response_times else 0  # Simplified for small sample
+    }
+    
+    print(f'Performance test complete!')
+    print(f'Success rate: {performance_data["success_rate"]:.1%}')
+    print(f'Average response: {performance_data["avg_response_ms"]:.2f}ms')
+else:
+    performance_data = {
+        'error': 'No successful requests',
+        'total_requests': 5,
+        'successful': 0,
+        'success_rate': 0
+    }
+    print('Performance test failed - no successful requests')
+
+# Save results
+with open('performance-report.json', 'w') as f:
+    json.dump(performance_data, f, indent=2)
+
+# Save raw data
+if response_times:
+    with open('performance-data.csv', 'w') as csv_file:
+        csv_file.write('request,response_time_ms\n')
+        for idx, time_val in enumerate(response_times, 1):
+            csv_file.write(f'{idx},{time_val:.2f}\n')
+EOF
         
-        # Save results
-        with open('performance-report.json', 'w') as f:
-            json.dump(performance_data, f, indent=2)
-        
-        # Save raw data
-        if response_times:
-            with open('performance-data.csv', 'w') as csv_file:
-                csv_file.write('request,response_time_ms\\n')
-                for idx, time_val in enumerate(response_times, 1):
-                    csv_file.write(f'{idx},{time_val:.2f}\\n')
-        "
+        python3 performance_test.py
         
         # Cleanup
         docker stop test-server 2>/dev/null || true
@@ -497,6 +551,16 @@ jobs:
         name: ${{ env.ARTIFACT_NAME }}
         path: model-output/
     
+    - name: Copy model files to root for Docker build
+      run: |
+        echo "Preparing model files for Docker build..."
+        cp model-output/model.pth . 2>/dev/null || true
+        cp model-output/class_info.json . 2>/dev/null || true
+        cp model-output/training_metrics.json . 2>/dev/null || true
+        
+        echo "Current directory:"
+        ls -la
+    
     - name: Normalize repository identifier
       id: normalize-name
       run: |
@@ -521,8 +585,8 @@ jobs:
         echo "Repository: $REPO_NAME"
         echo "Model version: $MODEL_TAG"
         
-        # Build container
-        docker build -f docker/Dockerfile.serve \
+        # Build container with inference Dockerfile
+        docker build -f Dockerfile.inference \
           -t ${{ env.REGISTRY_URL }}/$REPO_NAME:latest \
           -t ${{ env.REGISTRY_URL }}/$REPO_NAME:$MODEL_TAG .
         
