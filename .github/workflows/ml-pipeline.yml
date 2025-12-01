@@ -124,11 +124,6 @@ jobs:
           exit 1
         fi
     
-    - name: Create inference environment
-      run: |
-        echo "Creating inference environment..."
-        docker build -f docker/Dockerfile.serve -t model-server:latest .
-    
     - name: Save training artifacts
       uses: actions/upload-artifact@v4
       with:
