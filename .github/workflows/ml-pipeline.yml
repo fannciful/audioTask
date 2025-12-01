@@ -87,30 +87,39 @@ jobs:
         # Prepare output location
         mkdir -p model-output artifacts
         
-        # Execute training
-        docker run --rm \
-          -v $(pwd)/model-output:/app/output \
+        # Execute training - додаємо --network=host для доступу до інтернету
+        docker run --rm --network=host \
+          -v $(pwd)/model-output:/app/model-output \
           -v $(pwd)/artifacts:/app/artifacts \
           -v $(pwd)/data:/app/data \
-          -e TRAINING_ITERATIONS=${{ github.event.inputs.training_cycles || '3' }} \
-          -e SAMPLE_SIZE=${{ github.event.inputs.compact_dataset && '100' || '500' }} \
+          -e EPOCHS=${{ github.event.inputs.training_cycles || '2' }} \
+          -e SAMPLES_PER_CLASS=${{ github.event.inputs.compact_dataset && '10' || '50' }} \
           model-trainer:latest
+        
+        # Детальна перевірка файлів
+        echo "=== Checking output files ==="
+        echo "Files in model-output/:"
+        ls -la model-output/ || echo "No model-output directory"
+        echo "---"
+        echo "Content of training-log.txt:"
+        cat model-output/training-log.txt || echo "File not found"
         
         # Validate results
         if [ -f "model-output/model-weights.pth" ]; then
-          echo "Training completed"
+          echo "✅ Training completed - model file found"
           echo "training-status=success" >> $GITHUB_OUTPUT
           
           if [ -f "model-output/training-log.txt" ]; then
-            SCORE=$(grep "Model Accuracy" model-output/training-log.txt | grep -o '[0-9]*\.[0-9]*' | head -1 || echo "0")
+            # Шукаємо "Model Accuracy:" у лозі
+            SCORE=$(grep "Model Accuracy:" model-output/training-log.txt | grep -o '[0-9]*\.[0-9]*' | head -1 || echo "0")
             echo "performance-score=$SCORE" >> $GITHUB_OUTPUT
             echo "Model Accuracy: $SCORE%"
           else
             echo "performance-score=0" >> $GITHUB_OUTPUT
-            echo "Training log not found, using default score 0"
+            echo "⚠️ Training log not found"
           fi
         else
-          echo "Training failed"
+          echo "❌ Training failed - model file not found"
           echo "training-status=failed" >> $GITHUB_OUTPUT
           exit 1
         fi

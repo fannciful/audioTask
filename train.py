@@ -3,7 +3,7 @@ import torch
 import torchaudio
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader, Subset, TensorDataset
 from torchaudio.datasets import SPEECHCOMMANDS
 import numpy as np
 import json
@@ -121,7 +121,6 @@ def get_minimal_dataset(subset, samples_per_class=10):
         
     except Exception as e:
         print(f"❌ Error loading dataset: {e}")
-        from torch.utils.data import TensorDataset
         print("🎲 Using synthetic data as fallback...")
         
         num_samples = max(1, samples_per_class * len(target_classes))
@@ -240,10 +239,11 @@ print("✅ Model saved to model-output/model-weights.pth")
 # Збереження повної моделі
 torch.save(model, 'model-output/model-full.pth')
 
-# Лог для пайплайну (з ключовим рядком для пошуку accuracy)
+# КРИТИЧНО ВАЖЛИВО: Записуємо accuracy у форматі, який шукає пайплайн
+# Пайтейплін шукає "Model Accuracy:" у файлі training-log.txt
 with open('model-output/training-log.txt', 'w') as f:
     f.write(f"=== TRAINING LOG ===\n")
-    f.write(f"Model Accuracy: {test_accuracy:.2f}%\n")
+    f.write(f"Model Accuracy: {test_accuracy:.2f}%\n")  # Цей рядок критично важливий!
     f.write(f"Final Loss: {avg_test_loss:.4f}\n")
     f.write(f"Training Time: {training_time:.2f}s\n")
     f.write(f"Test Samples: {test_total}\n")
@@ -310,5 +310,9 @@ with open('artifacts/training.log', 'w') as f:
     f.write("=======================\n")
 print("✅ Training log saved to artifacts/training.log")
 
+# КРИТИЧНО ВАЖЛИВИЙ КРОК: Повертаємо 0 для успішного завершення
 print("🎉 Training completed successfully!")
 print("📁 All artifacts saved in both 'artifacts/' and 'model-output/' directories")
+
+# Гарантовано повертаємо успішний код завершення
+exit(0)
