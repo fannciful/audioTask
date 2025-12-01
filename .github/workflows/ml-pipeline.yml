@@ -85,11 +85,12 @@ jobs:
         echo "Starting model training..."
         
         # Prepare output location
-        mkdir -p model-output
+        mkdir -p model-output artifacts
         
         # Execute training
         docker run --rm \
           -v $(pwd)/model-output:/app/output \
+          -v $(pwd)/artifacts:/app/artifacts \
           -v $(pwd)/data:/app/data \
           -e TRAINING_ITERATIONS=${{ github.event.inputs.training_cycles || '3' }} \
           -e SAMPLE_SIZE=${{ github.event.inputs.compact_dataset && '100' || '500' }} \
@@ -104,6 +105,9 @@ jobs:
             SCORE=$(grep "Model Accuracy" model-output/training-log.txt | grep -o '[0-9]*\.[0-9]*' | head -1 || echo "0")
             echo "performance-score=$SCORE" >> $GITHUB_OUTPUT
             echo "Model Accuracy: $SCORE%"
+          else
+            echo "performance-score=0" >> $GITHUB_OUTPUT
+            echo "Training log not found, using default score 0"
           fi
         else
           echo "Training failed"
