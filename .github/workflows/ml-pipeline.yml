@@ -174,7 +174,7 @@ jobs:
         echo "Running model validation..."
         
         # Створюємо Python скрипт для валідації
-        cat > validate_model.py << 'VALIDATE_EOF'
+        cat > validate_model.py << 'EOF'
         import torch
         import torch.nn as nn
         import json
@@ -279,7 +279,7 @@ jobs:
         print(f'Success rate: {validation_report["pass_rate"]:.1%}')
         print(f'Average confidence: {validation_report["avg_confidence"]:.3f}')
         print(f'Status: {validation_report["validation_status"]}')
-        VALIDATE_EOF
+        EOF
         
         python validate_model.py
     
@@ -319,7 +319,7 @@ jobs:
           echo "⚠️ Dockerfile.serve not found, creating simple test server..."
           
           # Create test server script first
-          cat > test_server.py << 'EOF_TEST_SERVER'
+          cat > test_server.py << 'EOF'
           from flask import Flask, jsonify
           import time
           app = Flask(__name__)
@@ -331,17 +331,17 @@ jobs:
           
           if __name__ == '__main__':
               app.run(host='0.0.0.0', port=8080, debug=False)
-          EOF_TEST_SERVER
+          EOF
           
           # Then create Dockerfile
-          cat > Dockerfile.test << 'EOF_DOCKERFILE'
+          cat > Dockerfile.test << 'EOF'
           FROM python:3.11-slim
           WORKDIR /app
           RUN pip install flask
           COPY test_server.py .
           EXPOSE 8080
           CMD ["python", "test_server.py"]
-          EOF_DOCKERFILE
+          EOF
           
           docker build -f Dockerfile.test -t model-server:latest .
         fi
@@ -369,8 +369,8 @@ jobs:
           echo "⚠️ Server health check failed, but continuing with tests..."
         fi
         
-        # Run tests
-        python -c "
+        # Run tests - create a Python script file first
+        cat > performance_test.py << 'EOF'
         import requests
         import time
         import json
@@ -409,8 +409,8 @@ jobs:
             }
             
             print(f'✅ Performance test complete!')
-            print(f'Success rate: {performance_data[\"success_rate\"]:.1%}')
-            print(f'Average response: {performance_data[\"avg_response_ms\"]:.2f}ms')
+            print(f'Success rate: {performance_data["success_rate"]:.1%}')
+            print(f'Average response: {performance_data["avg_response_ms"]:.2f}ms')
         else:
             performance_data = {
                 'error': 'No successful requests',
@@ -431,14 +431,16 @@ jobs:
                 csv_file.write('request,response_time_ms\n')
                 for idx, time_val in enumerate(response_times, 1):
                     csv_file.write(f'{idx},{time_val:.2f}\n')
-        "
+        EOF
+        
+        python performance_test.py
         
         # Cleanup
         docker stop test-server 2>/dev/null || true
         docker rm test-server 2>/dev/null || true
         
         # Cleanup temp files
-        rm -f Dockerfile.test test_server.py 2>/dev/null || true
+        rm -f Dockerfile.test test_server.py performance_test.py 2>/dev/null || true
     
     - name: Save performance results
       uses: actions/upload-artifact@v4
@@ -504,14 +506,14 @@ jobs:
           echo "⚠️ docker/Dockerfile.serve not found, creating minimal serve image..."
           
           # Створюємо мінімальний Dockerfile
-          cat > Dockerfile.minimal << 'EOF_MINIMAL'
+          cat > Dockerfile.minimal << 'EOF'
           FROM python:3.11-slim
           WORKDIR /app
           COPY model-output/ ./model/
           RUN echo "Model inference server" > README.md
           EXPOSE 8080
           CMD ["echo", "Model container ready. Add inference logic in Dockerfile.serve"]
-          EOF_MINIMAL
+          EOF
           
           DOCKERFILE="Dockerfile.minimal"
         fi
@@ -565,7 +567,7 @@ jobs:
       run: |
         echo "Generating pipeline report..."
         
-        cat > pipeline-report.md << 'REPORT_EOF'
+        cat > pipeline-report.md << 'EOF'
         # ML Pipeline Execution Report
         
         ## Execution Details
@@ -605,7 +607,7 @@ jobs:
         - Performance testing
         - Registry integration
         
-        REPORT_EOF
+        EOF
         
         echo "Report generated successfully"
     
