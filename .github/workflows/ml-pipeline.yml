@@ -331,7 +331,7 @@ jobs:
           
           if __name__ == '__main__':
               app.run(host='0.0.0.0', port=8080, debug=False)
-          EOF
+          PYEOF
           
           # Then create Dockerfile
           cat > Dockerfile.test << 'EOF'
@@ -341,7 +341,7 @@ jobs:
           COPY test_server.py .
           EXPOSE 8080
           CMD ["python", "test_server.py"]
-          EOF
+          DFEOF
           
           docker build -f Dockerfile.test -t model-server:latest .
         fi
@@ -431,7 +431,7 @@ jobs:
                 csv_file.write('request,response_time_ms\n')
                 for idx, time_val in enumerate(response_times, 1):
                     csv_file.write(f'{idx},{time_val:.2f}\n')
-        EOF
+        PYEOF
         
         python performance_test.py
         
