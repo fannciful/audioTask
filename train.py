@@ -3,20 +3,20 @@ import torch
 import torchaudio
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, Subset, TensorDataset
+from torch.utils.data import DataLoader, Subset
 from torchaudio.datasets import SPEECHCOMMANDS
 import numpy as np
 import json
 import time
 
-# Створюємо обидві папки для сумісності
+# Створюємо папку для артефактів
 os.makedirs('artifacts', exist_ok=True)
-os.makedirs('model-output', exist_ok=True)
 
 # --- Model definition ---
 class AudioClassifier(nn.Module):
     def __init__(self, num_classes=4):
         super().__init__()
+        # Спрощена архітектура без BatchNorm для стабільності
         self.conv1 = nn.Conv2d(1, 8, kernel_size=3, stride=1, padding=1)
         self.conv2 = nn.Conv2d(8, 16, kernel_size=3, stride=1, padding=1)
         self.conv3 = nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1)
@@ -28,6 +28,7 @@ class AudioClassifier(nn.Module):
         self.fc2 = nn.Linear(64, num_classes)
 
     def forward(self, x):
+        # x shape: [batch, channels, height, width]
         x = self.pool(self.relu(self.conv1(x)))
         x = self.pool(self.relu(self.conv2(x)))
         x = self.pool(self.relu(self.conv3(x)))
@@ -69,7 +70,10 @@ def simple_collate_fn(batch):
     
     for waveform, sample_rate, label, speaker_id, utterance_number in batch:
         try:
-            spec = mel_spectrogram(waveform).squeeze(0)
+            # Перетворення в спектрограму
+            spec = mel_spectrogram(waveform).squeeze(0)  # [32, time]
+            
+            # Обрізаємо або паддимо до фіксованого розміру
             time_frames = 32
             if spec.shape[1] > time_frames:
                 spec = spec[:, :time_frames]
@@ -77,6 +81,7 @@ def simple_collate_fn(batch):
                 pad_size = time_frames - spec.shape[1]
                 spec = torch.nn.functional.pad(spec, (0, pad_size))
             
+            # Додаємо channel dimension -> [1, 32, 32]
             spec = spec.unsqueeze(0)
             tensors.append(spec)
             targets.append(label_to_index(label))
@@ -85,6 +90,7 @@ def simple_collate_fn(batch):
             continue
     
     if not tensors:
+        # Повертаємо dummy data якщо немає реальних даних
         dummy_input = torch.randn(2, 1, 32, 32)
         dummy_target = torch.tensor([0, 1])
         return dummy_input, dummy_target
@@ -101,6 +107,7 @@ def get_minimal_dataset(subset, samples_per_class=10):
         class_counts = {cls: 0 for cls in target_classes}
         selected_indices = []
         
+        # Пошук зразків для кожного класу
         for idx in range(len(dataset)):
             try:
                 waveform, sample_rate, label, speaker_id, utterance_number = dataset[idx]
@@ -121,9 +128,12 @@ def get_minimal_dataset(subset, samples_per_class=10):
         
     except Exception as e:
         print(f"❌ Error loading dataset: {e}")
+        # Synthetic fallback
+        from torch.utils.data import TensorDataset
         print("🎲 Using synthetic data as fallback...")
         
         num_samples = max(1, samples_per_class * len(target_classes))
+        # Створюємо synthetic дані правильної форми [batch, 1, 32, 32]
         dummy_inputs = torch.randn(num_samples, 1, 32, 32)
         dummy_labels = torch.randint(0, len(target_classes), (num_samples,))
         return TensorDataset(dummy_inputs, dummy_labels)
@@ -132,6 +142,7 @@ print("🔄 Loading datasets...")
 train_set = get_minimal_dataset('training', samples_per_class)
 test_set = get_minimal_dataset('testing', max(1, samples_per_class // 2))
 
+# Завжди використовуємо collate_fn для консистентності
 train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, collate_fn=simple_collate_fn)
 test_loader = DataLoader(test_set, batch_size=batch_size, shuffle=False, collate_fn=simple_collate_fn)
 
@@ -159,8 +170,9 @@ for epoch in range(epochs):
     epoch_total = 0
     
     for batch_idx, (inputs, labels) in enumerate(train_loader):
+        # Переконуємося, що inputs має правильну форму
         if len(inputs.shape) == 3:
-            inputs = inputs.unsqueeze(1)
+            inputs = inputs.unsqueeze(1)  # [batch, 32, 32] -> [batch, 1, 32, 32]
             
         inputs, labels = inputs.to(device), labels.to(device)
 
@@ -176,11 +188,12 @@ for epoch in range(epochs):
         epoch_total += labels.size(0)
         epoch_correct += (predicted == labels).sum().item()
         
-        if batch_idx % 2 == 0:
+        if batch_idx % 2 == 0:  # Логування частіше для маленьких датасетів
             batch_accuracy = 100 * epoch_correct / epoch_total if epoch_total > 0 else 0
             print(f'Epoch [{epoch+1}/{epochs}], Batch [{batch_idx}/{len(train_loader)}], '
                   f'Loss: {loss.item():.4f}, Accuracy: {batch_accuracy:.2f}%')
     
+    # Епохальна статистика
     epoch_accuracy = 100 * epoch_correct / epoch_total if epoch_total > 0 else 0
     avg_epoch_loss = epoch_loss / max(1, len(train_loader))
     
@@ -206,6 +219,7 @@ with torch.no_grad():
         if len(inputs) == 0:
             continue
             
+        # Переконуємося, що inputs має правильну форму
         if len(inputs.shape) == 3:
             inputs = inputs.unsqueeze(1)
             
@@ -232,45 +246,24 @@ print(f'  - Test samples: {test_total}')
 # --- Збереження моделі та артефактів ---
 print("💾 Saving model and artifacts...")
 
-# 1. Збереження для пайплайну (model-output/)
-torch.save(model.state_dict(), 'model-output/model-weights.pth')
-print("✅ Model saved to model-output/model-weights.pth")
-
-# Збереження повної моделі
-torch.save(model, 'model-output/model-full.pth')
-
-# КРИТИЧНО ВАЖЛИВО: Записуємо accuracy у форматі, який шукає пайплайн
-# Пайтейплін шукає "Model Accuracy:" у файлі training-log.txt
-with open('model-output/training-log.txt', 'w') as f:
-    f.write(f"=== TRAINING LOG ===\n")
-    f.write(f"Model Accuracy: {test_accuracy:.2f}%\n")  # Цей рядок критично важливий!
-    f.write(f"Final Loss: {avg_test_loss:.4f}\n")
-    f.write(f"Training Time: {training_time:.2f}s\n")
-    f.write(f"Test Samples: {test_total}\n")
-    f.write(f"Epochs: {epochs}\n")
-    f.write(f"Batch Size: {batch_size}\n")
-    f.write(f"Model Version: 1.0.0\n")
-    f.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-    f.write("====================\n")
-print("✅ Training log saved to model-output/training-log.txt")
-
-# 2. Збереження для локального використання (artifacts/)
+# Зберігаємо модель
 torch.save(model.state_dict(), 'artifacts/model.pth')
 print("✅ Model saved to artifacts/model.pth")
 
+# Зберігаємо всю модель (для легшого завантаження)
 torch.save(model, 'artifacts/model_full.pth')
 print("✅ Full model saved to artifacts/model_full.pth")
 
-# Інформація про класи
+# Зберігаємо інформацію про класи
 with open('artifacts/class_info.json', 'w') as f:
     json.dump({
         'target_classes': target_classes,
         'num_classes': num_classes,
-        'input_shape': [1, 32, 32]
+        'input_shape': [1, 32, 32]  # Додаємо інформацію про форму входу
     }, f, indent=2)
 print("✅ Class info saved to artifacts/class_info.json")
 
-# Детальні метрики
+# Зберігаємо детальний лог тренування
 training_summary = {
     'training_parameters': {
         'epochs': epochs,
@@ -296,7 +289,7 @@ with open('artifacts/training_metrics.json', 'w') as f:
     json.dump(training_summary, f, indent=2)
 print("✅ Training metrics saved to artifacts/training_metrics.json")
 
-# Простий лог для артефактів
+# Зберігаємо простий лог
 with open('artifacts/training.log', 'w') as f:
     f.write("=== TRAINING SUMMARY ===\n")
     f.write(f"Final Accuracy: {test_accuracy:.2f}%\n")
@@ -306,13 +299,10 @@ with open('artifacts/training.log', 'w') as f:
     f.write(f"Batch Size: {batch_size}\n")
     f.write(f"Samples per Class: {samples_per_class}\n")
     f.write(f"Device: {device}\n")
+    f.write(f"Input Shape: [1, 32, 32]\n")
     f.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
     f.write("=======================\n")
 print("✅ Training log saved to artifacts/training.log")
 
-# КРИТИЧНО ВАЖЛИВИЙ КРОК: Повертаємо 0 для успішного завершення
 print("🎉 Training completed successfully!")
-print("📁 All artifacts saved in both 'artifacts/' and 'model-output/' directories")
-
-# Гарантовано повертаємо успішний код завершення
-exit(0)
+print("📁 All artifacts saved in 'artifacts/' directory")

@@ -1,31 +1,31 @@
-# AI Model Update
+# ML Model Training Pull Request
 
-## What's Changed
-- [ ] Neural network structure updates
-- [ ] Learning process improvements  
-- [ ] Data preparation modifications
-- [ ] Model parameters adjustment
+## Changes
+- [ ] Model architecture modifications
+- [ ] Training script updates
+- [ ] Data preprocessing changes
+- [ ] Hyperparameter tuning
 
-## Verification
-- [ ] Basic tests completed
-- [ ] Training finishes correctly
-- [ ] Prediction service works
-- [ ] Speed tests meet requirements
+## Testing
+- [ ] Unit tests pass
+- [ ] Model training completes successfully
+- [ ] Inference API works correctly
+- [ ] Performance benchmarks within acceptable range
 
-## Results
-<!-- CI system updates these automatically -->
+## Metrics
+<!-- CI will automatically populate this section -->
 
-### Training Metrics
-- Performance: 
-- Error Rate: 
-- Duration: 
+### Training Results
+- Accuracy: 
+- Loss: 
+- Training Time: 
 
-### System Metrics
-- Response Time: 
-- Reliability: 
+### Performance
+- Inference Latency: 
+- Success Rate: 
 
-## Final Checks
-- [ ] Code meets project standards
-- [ ] Docs updated if required
-- [ ] All automated tests pass
-- [ ] Model files created successfully
+## Checklist
+- [ ] Code follows project conventions
+- [ ] Documentation updated if needed
+- [ ] All CI checks pass
+- [ ] Model artifacts generated successfully
