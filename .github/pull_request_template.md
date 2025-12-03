@@ -1,31 +1,31 @@
-# ML Model Training Pull Request
+# ML Model Training PR
 
 ## Changes
-- [ ] Model architecture modifications
-- [ ] Training script updates
-- [ ] Data preprocessing changes
-- [ ] Hyperparameter tuning
+- □  ARCHITECTURE  ── Model structure modifications
+- □  TRAINING      ── Script updates & improvements  
+- □  DATA          ── Preprocessing pipeline changes
+- □  PARAMETERS    ── Hyperparameter tuning
 
 ## Testing
-- [ ] Unit tests pass
-- [ ] Model training completes successfully
-- [ ] Inference API works correctly
-- [ ] Performance benchmarks within acceptable range
+- □  TESTS       ── Unit tests pass
+- □  TRAINING    ── Complete execution
+- □  INFERENCE   ── API functional
+- □  PERFORMANCE ── Benchmarks acceptable
 
 ## Metrics
-<!-- CI will automatically populate this section -->
+<!-- CI auto-populated section -->
 
 ### Training Results
-- Accuracy: 
-- Loss: 
-- Training Time: 
+- Accuracy: [ ]
+- Loss: [ ]
+- Time: [ ]
 
 ### Performance
-- Inference Latency: 
-- Success Rate: 
+- Latency: [ ]
+- Success: [ ]
 
 ## Checklist
-- [ ] Code follows project conventions
-- [ ] Documentation updated if needed
-- [ ] All CI checks pass
-- [ ] Model artifacts generated successfully
+- Code standarts maintained
+- Documentation updated
+- CI pipeline passed
+- Artifacts generated
