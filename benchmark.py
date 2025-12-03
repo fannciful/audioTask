@@ -12,14 +12,14 @@ def generate_test_audio():
     sample_rate = 16000
     duration = 1.0
     t = np.linspace(0, duration, int(sample_rate * duration))
-    audio_data = 0.5 * np.sin(2 * np.pi * 440 * t)  # Нота Ля
+    audio_data = 0.5 * np.sin(2 * np.pi * 440 * t) 
     
     buffer = io.BytesIO()
     sf.write(buffer, audio_data, sample_rate, format='WAV')
     buffer.seek(0)
     return buffer
 
-def benchmark_api(api_url, num_requests=5):  # Зменшено для CI/CD
+def benchmark_api(api_url, num_requests=5):
     """Бенчмарк для API інференсу"""
     results = {
         'latencies': [],
@@ -30,7 +30,6 @@ def benchmark_api(api_url, num_requests=5):  # Зменшено для CI/CD
     
     for i in range(num_requests):
         try:
-            # Генеруємо тестове аудіо
             audio_buffer = generate_test_audio()
             
             files = {'file': ('test.wav', audio_buffer, 'audio/wav')}
@@ -53,7 +52,6 @@ def benchmark_api(api_url, num_requests=5):  # Зменшено для CI/CD
             results['errors'].append(str(e))
             print(f"❌ Request {i+1}: {e}")
     
-    # Розрахунок метрик
     if results['latencies']:
         results['avg_latency'] = statistics.mean(results['latencies'])
         results['min_latency'] = min(results['latencies'])
@@ -80,7 +78,6 @@ def main():
     
     results = benchmark_api(args.url, args.requests)
     
-    # Зберігаємо результати
     with open(args.output, 'w') as f:
         json.dump(results, f, indent=2)
     
